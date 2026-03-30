@@ -1,6 +1,6 @@
 # PDF Knowledge Graph
 
-A full-stack system that converts PDF documents into an interactive, queryable knowledge graph.
+PDF → knowledge graph → flashcards. Multi-view learning platform with spaced repetition, built with React, Neo4j, and Claude API.
 
 ## Architecture
 
