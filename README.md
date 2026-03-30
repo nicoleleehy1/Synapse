@@ -4,7 +4,7 @@ PDF → knowledge graph → flashcards. Multi-view learning platform with spaced
 
 ## DEMO
 <img src="https://github.com/user-attachments/assets/cf4ff867-2977-4a67-aeaf-cfb84221dfe3"/>
-<img src="https://github.com/user-attachments/assets/500ebe43-58c7-4cdf-ad8c-d95105bd21ce" width="48%"/>
+<img src="https://github.com/user-attachments/assets/500ebe43-58c7-4cdf-ad8c-d95105bd21ce"/>
 
 
 ## Architecture
