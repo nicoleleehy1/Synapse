@@ -2,6 +2,9 @@
 
 PDF → knowledge graph → flashcards. Multi-view learning platform with spaced repetition, built with React, Neo4j, and Claude API.
 
+![09F88104-382D-4A1B-8CB3-D98164CB4654](https://github.com/user-attachments/assets/cf4ff867-2977-4a67-aeaf-cfb84221dfe3)
+
+
 ## Architecture
 
 ```
