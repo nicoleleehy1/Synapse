@@ -1,6 +1,6 @@
-# PDF Knowledge Graph
-
-PDF → knowledge graph → flashcards. Multi-view learning platform with spaced repetition, built with React, Neo4j, and Claude API.
+# Synapse AI
+From document to memory, instantly.
+An AI learning tool that converts documents into personalized knowledge graphs, flashcards, and visualizations to help students retain and memorize information more effectively.
 
 ## DEMO
 <img src="https://github.com/user-attachments/assets/cf4ff867-2977-4a67-aeaf-cfb84221dfe3"/>
