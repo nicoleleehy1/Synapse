@@ -69,6 +69,9 @@ class GraphStore:
                 settings.neo4j_uri,
                 auth=(settings.neo4j_user, settings.neo4j_password),
                 notifications_min_severity="WARNING",
+                # "Unknown label/property" warnings fire on every query against an empty or
+                # partly built graph (e.g. before the first topics exist); they are noise.
+                notifications_disabled_classifications=["UNRECOGNIZED"],
             )
         await self._driver.verify_connectivity()
         await self.ensure_schema()
