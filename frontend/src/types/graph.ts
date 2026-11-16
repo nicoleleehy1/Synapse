@@ -118,3 +118,99 @@ export interface OrphanInfo {
 export interface EdgeOrphanInfo {
   orphaned_target: GraphNode | null
 }
+
+// ── GraphRAG agent stream ─────────────────────────────────────────────────────
+
+export type AgentTool =
+  | 'search_passages' | 'search_entities' | 'explore_entities' | 'search_topics' | 'run_cypher'
+
+export interface AgentStep {
+  id: string
+  tool: AgentTool | string
+  input: Record<string, unknown>
+  summary?: string
+  is_error?: boolean
+}
+
+export interface AgentDone {
+  answer: string
+  sources: SourceChunk[]
+  graph: GraphData
+  highlight_ids: string[]
+  steps: number
+  latency_ms: number
+}
+
+export type AgentEvent =
+  | ({ type: 'step' } & AgentStep)
+  | { type: 'step_result'; id: string; summary: string; is_error: boolean }
+  | { type: 'text'; delta: string }
+  | { type: 'text_reset' }
+  | ({ type: 'done' } & AgentDone)
+  | { type: 'error'; message: string }
+
+export interface Topic {
+  id: string
+  level: number
+  title: string
+  summary: string
+  findings: string[]
+  size: number
+  parent_id: string | null
+  member_ids: string[]
+}
+
+// ── Learning layer ────────────────────────────────────────────────────────────
+
+export interface Highlight {
+  page: number
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+}
+
+export interface ChunkDetail {
+  chunk_id: string
+  text: string
+  page_number: number
+  document_id: string
+  document_name: string
+  highlights: Highlight[]
+  has_pdf: boolean
+}
+
+export type Rating = 1 | 2 | 3 | 4
+
+export interface Card {
+  id: string
+  front: string
+  back: string
+  chunk_id: string | null
+  document_id: string | null
+  entity_ids: string[]
+  entity_names: string[]
+  state: 'new' | 'review' | 'relearning'
+  reps: number
+  lapses: number
+  due_ms: number
+  /** Seconds until the card would next be due for each rating. */
+  intervals: Record<Rating, number>
+}
+
+export interface EntityMastery {
+  entity_id: string
+  mastery: number
+  cards: number
+  due: number
+}
+
+export interface StudyStats {
+  total: number
+  new: number
+  due: number
+  reviewed_today: number
+  retention_30d: number | null
+  streak_days: number
+  activity: number[]
+}

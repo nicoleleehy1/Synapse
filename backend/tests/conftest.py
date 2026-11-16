@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import tempfile
 
 # Settings are read at import time: configure before importing the app.
 os.environ.setdefault("NEO4J_PASSWORD", os.environ.get("NEO4J_TEST_PASSWORD", "testpassword"))
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+os.environ["PDF_DIR"] = tempfile.mkdtemp(prefix="synapse-pdfs-")
 if os.environ.get("NEO4J_TEST_URI"):
     os.environ["NEO4J_URI"] = os.environ["NEO4J_TEST_URI"]
 

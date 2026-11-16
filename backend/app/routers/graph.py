@@ -5,6 +5,7 @@ from neo4j.exceptions import Neo4jError
 
 from app.dependencies import get_graph_store
 from app.models import (
+    CommunityOut,
     CreateEdgeRequest,
     CreateNodeRequest,
     CypherRequest,
@@ -84,6 +85,15 @@ async def get_edge_orphan_target(
     """Returns the target node of an edge if it would be isolated after deletion."""
     target = await graph_store.get_edge_orphan_target(edge_id)
     return EdgeOrphanInfo(orphaned_target=target)
+
+
+# ── Topics (communities) ─────────────────────────────────────────────────────
+
+
+@router.get("/topics", response_model=list[CommunityOut])
+async def list_topics(graph_store: GraphStore = Depends(get_graph_store)):
+    """The community hierarchy: broad topics (level 1) and their sub-topics (level 0)."""
+    return await graph_store.list_communities()
 
 
 # ── Create ────────────────────────────────────────────────────────────────────

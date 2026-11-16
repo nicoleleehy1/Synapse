@@ -2,12 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import { forceCollide } from 'd3-force'
 import { ChevronLeft, Pencil, Trash2 } from 'lucide-react'
+import { masteryColor } from '../lib/study'
 import type { FGData, FGNode, FGLink } from '../types/graph'
 import type { DrillLevel } from '../hooks/useGraphEditor'
 
 interface Props {
   data: FGData
   selectedNodeId: string | null
+  /** Entities the last answer drew on: everything else is dimmed. */
+  highlightIds?: ReadonlySet<string>
+  /** Per-entity mastery (0-1) from spaced repetition, drawn as a coloured ring. */
+  mastery?: ReadonlyMap<string, number>
   drillStack: DrillLevel[]
   onNodeClick: (node: FGNode) => void
   onNodeDoubleClick: (node: FGNode) => void
@@ -166,7 +171,7 @@ function EdgeLabelPopover({ initial = '', onConfirm, onClose }: {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function GraphCanvas({
-  data, selectedNodeId, drillStack,
+  data, selectedNodeId, highlightIds, mastery, drillStack,
   onNodeClick, onNodeDoubleClick, onDrillUp,
   onCreateNode, onEditNode, onDeleteNode,
   onCreateEdge, onDeleteEdge, onUpdateEdge,
@@ -389,6 +394,8 @@ export function GraphCanvas({
   // ── Canvas renderers ───────────────────────────────────────────────────────
   const nodeCanvasObject = useCallback((node: FGNode, ctx: CanvasRenderingContext2D) => {
     const isSelected = node.id === selectedNodeId
+    const dimmed = !!highlightIds && highlightIds.size > 0 && !highlightIds.has(node.id) && !isSelected
+    ctx.globalAlpha = dimmed ? 0.18 : 1
     const label = node.name.length > MAX_CHARS ? node.name.slice(0, MAX_CHARS - 1) + '…' : node.name
     ctx.font = `500 ${FONT_SIZE}px Inter, system-ui, sans-serif`
     const textW = ctx.measureText(label).width
@@ -397,7 +404,14 @@ export function GraphCanvas({
     const x = (node.x ?? 0) - nodeW / 2
     const y = (node.y ?? 0) - nodeH / 2
 
-    if (isSelected) {
+    const m = mastery?.get(node.id)
+    if (m !== undefined) {
+      drawRoundedRect(ctx, x - 3, y - 3, nodeW + 6, nodeH + 6, RADIUS + 3)
+      ctx.fillStyle = masteryColor(m)
+      ctx.fill()
+    }
+
+    if (isSelected || (highlightIds?.has(node.id) ?? false)) {
       drawRoundedRect(ctx, x - 2.5, y - 2.5, nodeW + 5, nodeH + 5, RADIUS + 2)
       ctx.strokeStyle = '#0a0a0a'
       ctx.lineWidth = 1.5
@@ -411,7 +425,8 @@ export function GraphCanvas({
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(label, node.x ?? 0, node.y ?? 0)
-  }, [selectedNodeId])
+    ctx.globalAlpha = 1
+  }, [selectedNodeId, highlightIds, mastery])
 
   const nodePointerAreaPaint = useCallback((node: FGNode, color: string, ctx: CanvasRenderingContext2D) => {
     ctx.font = `500 ${FONT_SIZE}px Inter, system-ui, sans-serif`
@@ -428,13 +443,17 @@ export function GraphCanvas({
     const tgt = link.target as FGNode
     if (src.x == null || src.y == null || tgt.x == null || tgt.y == null) return
     const isActive = hoveredLink?.id === link.id || selectedEdgeId === link.id
+    const lit = !!highlightIds && highlightIds.size > 0 && highlightIds.has(src.id) && highlightIds.has(tgt.id)
+    const dim = !!highlightIds && highlightIds.size > 0 && !lit
+    ctx.globalAlpha = dim ? 0.25 : 1
     ctx.beginPath()
     ctx.moveTo(src.x, src.y)
     ctx.lineTo(tgt.x, tgt.y)
-    ctx.strokeStyle = isActive ? 'rgba(0,0,0,0.4)' : (link.color ?? 'rgba(0,0,0,0.08)')
-    ctx.lineWidth = isActive ? 1.5 : 0.75
+    ctx.strokeStyle = isActive || lit ? 'rgba(0,0,0,0.45)' : (link.color ?? 'rgba(0,0,0,0.08)')
+    ctx.lineWidth = isActive || lit ? 1.5 : 0.75
     ctx.stroke()
-  }, [hoveredLink, selectedEdgeId])
+    ctx.globalAlpha = 1
+  }, [hoveredLink, selectedEdgeId, highlightIds])
 
   const selectedNode = selectedNodeId ? data.nodes.find(n => n.id === selectedNodeId) : null
 

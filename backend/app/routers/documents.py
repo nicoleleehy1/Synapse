@@ -10,15 +10,16 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import settings
 from app.dependencies import get_graph_store, get_pipeline
-from app.models import DocumentStatus, UploadResponse
+from app.models import ChunkDetail, DocumentStatus, UploadResponse
 from app.ratelimit import limit_uploads
 from app.services.events import broker
 from app.services.graph_store import GraphStore
-from app.services.pipeline import Pipeline
+from app.services.pipeline import Pipeline, stored_pdf_path
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -129,8 +130,42 @@ async def stream_status(
 
 
 @router.delete("/{document_id}")
-async def delete_document(document_id: str, graph_store: GraphStore = Depends(get_graph_store)):
+async def delete_document(
+    document_id: str, request: Request, graph_store: GraphStore = Depends(get_graph_store)
+):
     if not await graph_store.get_document(document_id):
         raise HTTPException(status_code=404, detail="Document not found.")
     await graph_store.delete_document(document_id)
+    await asyncio.to_thread(stored_pdf_path(document_id).unlink, missing_ok=True)
+    scheduler = getattr(request.app.state, "communities", None)
+    if scheduler:
+        scheduler.request()  # topics change when a document leaves the graph
     return {"message": "Deleted."}
+
+
+@router.get("/{document_id}/pdf")
+async def get_pdf(document_id: str, graph_store: GraphStore = Depends(get_graph_store)):
+    """The original PDF, for the source viewer (only kept when RETAIN_PDFS is on)."""
+    doc = await graph_store.get_document(document_id)  # validates the id before touching the disk
+    path = stored_pdf_path(document_id) if doc else None
+    if path is None or not await asyncio.to_thread(path.is_file):
+        raise HTTPException(status_code=404, detail="PDF not available.")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=doc.filename,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.get("/chunks/{chunk_id}", response_model=ChunkDetail)
+async def get_chunk(chunk_id: str, graph_store: GraphStore = Depends(get_graph_store)):
+    """A source passage with its rectangles on the PDF page."""
+    chunk = await graph_store.chunk_detail(chunk_id)
+    if not chunk:
+        raise HTTPException(status_code=404, detail="Passage not found.")
+    # Ephemeral disks (e.g. Render's free tier) lose kept PDFs on redeploy: fall back to text.
+    if chunk["has_pdf"]:
+        chunk["has_pdf"] = await asyncio.to_thread(stored_pdf_path(chunk["document_id"]).is_file)
+    return chunk

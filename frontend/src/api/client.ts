@@ -1,8 +1,11 @@
 import axios from 'axios'
+import { readSSE } from '../lib/sse'
 import type {
+  AgentEvent, Topic,
   DocumentStatus, GraphData, QueryResponse,
   CreateNodePayload, UpdateNodePayload, CreateEdgePayload, GraphEdge, GraphNode,
   OrphanInfo, EdgeOrphanInfo,
+  Card, ChunkDetail, EntityMastery, Rating, StudyStats,
 } from '../types/graph'
 
 /** API origin: same-origin `/api` behind nginx/Vite, or an absolute URL in split deployments. */
@@ -118,4 +121,77 @@ export async function deleteNode(entityId: string, cascade: boolean): Promise<vo
 
 export async function deleteEdge(edgeId: string, cascade: boolean): Promise<void> {
   await api.delete(`/graph/edges/${edgeId}`, { params: { cascade } })
+}
+
+// ── GraphRAG agent ─────────────────────────────────────────────────────────
+
+/** Ask the GraphRAG agent; events (steps, answer tokens, final result) stream to `onEvent`. */
+export async function streamQuery(
+  query: string,
+  onEvent: (event: AgentEvent) => void,
+  opts: { documentId?: string; signal?: AbortSignal } = {},
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/query/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({ query, document_id: opts.documentId }),
+    signal: opts.signal,
+  })
+  if (!res.ok) {
+    let detail = `Request failed (${res.status})`
+    try { detail = (await res.json()).detail ?? detail } catch { /* not JSON */ }
+    if (res.status === 429) detail = 'Rate limit reached. Please try again later.'
+    throw new Error(detail)
+  }
+  await readSSE(res, ({ data }) => {
+    try {
+      onEvent(JSON.parse(data) as AgentEvent)
+    } catch {
+      // ignore keep-alives / malformed frames
+    }
+  }, opts.signal)
+}
+
+export async function listTopics(): Promise<Topic[]> {
+  const { data } = await api.get('/graph/topics')
+  return data
+}
+
+// ── Source viewer ──────────────────────────────────────────────────────────
+
+export async function getChunk(chunkId: string): Promise<ChunkDetail> {
+  const { data } = await api.get(`/documents/chunks/${encodeURIComponent(chunkId)}`)
+  return data
+}
+
+export function documentPdfUrl(documentId: string): string {
+  return `${API_BASE}/documents/${encodeURIComponent(documentId)}/pdf`
+}
+
+// ── Study ──────────────────────────────────────────────────────────────────
+
+export async function generateCards(count = 12, documentId?: string): Promise<number> {
+  const { data } = await api.post('/study/generate', { count, document_id: documentId })
+  return data.created
+}
+
+export async function getDueCards(limit = 50): Promise<Card[]> {
+  const { data } = await api.get('/study/due', { params: { limit } })
+  return data
+}
+
+export async function reviewCard(cardId: string, rating: Rating): Promise<Card> {
+  const { data } = await api.post(`/study/cards/${encodeURIComponent(cardId)}/review`, { rating })
+  return data
+}
+
+export async function getMastery(): Promise<EntityMastery[]> {
+  const { data } = await api.get('/study/mastery')
+  return data
+}
+
+export async function getStudyStats(): Promise<StudyStats> {
+  // getTimezoneOffset is minutes *behind* UTC; the API wants minutes east of UTC.
+  const { data } = await api.get('/study/stats', { params: { tz_offset_minutes: -new Date().getTimezoneOffset() } })
+  return data
 }

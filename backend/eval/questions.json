@@ -1,0 +1,72 @@
+[
+  {
+    "id": "local-1",
+    "kind": "local",
+    "question": "What is the rated capacity of the Kestrel-2 turbine?",
+    "reference": "The Kestrel-2 is rated at 1.2 megawatts.",
+    "facts": ["1.2 megawatts"]
+  },
+  {
+    "id": "local-2",
+    "kind": "local",
+    "question": "What caused the blade delamination on unit 4 of the Saltmarsh Array, and what changed afterwards?",
+    "reference": "A batch of epoxy resin from Brightwater Composites had been cured at too low a temperature. Brightwater changed its curing process and added a batch-level hardness test.",
+    "facts": ["Brightwater Composites", "cured at too low a temperature", "batch-level hardness test"]
+  },
+  {
+    "id": "multi-1",
+    "kind": "multi-hop",
+    "question": "Where did the person who led environmental monitoring on the Saltmarsh trial work before joining Meridian?",
+    "reference": "Dr. Lena Fischbach led environmental monitoring; before Meridian she led the marine acoustics group at the Calder Marine Institute.",
+    "facts": ["Lena Fischbach", "Calder Marine Institute"]
+  },
+  {
+    "id": "multi-2",
+    "kind": "multi-hop",
+    "question": "How is the chair of the Coastal Energy Consortium connected to Meridian Tidal Power?",
+    "reference": "The chair, Priya Raman, is a partner at Halcyon Ventures, which led Meridian's 48 million euro Series B in 2019; she joined Meridian's board and recused herself from the Saltmarsh funding vote.",
+    "facts": ["Priya Raman", "Halcyon Ventures", "Series B", "board", "recused"]
+  },
+  {
+    "id": "multi-3",
+    "kind": "multi-hop",
+    "question": "Why is Saltmarsh Phase II delayed, and which organisation's infrastructure is the bottleneck?",
+    "reference": "Phase II needs more export capacity at the Dunmore substation, which is close to its limit. Westcoast Grid operates it and says the upgrade cannot be done before 2025.",
+    "facts": ["Dunmore substation", "Westcoast Grid", "2025"]
+  },
+  {
+    "id": "multi-4",
+    "kind": "multi-hop",
+    "question": "What industry-wide change resulted from the defect found during the tidal trial?",
+    "reference": "The consortium adopted the CEC-QS1 quality standard for composite components, requiring batch-level testing; Brightwater Composites was the first supplier certified.",
+    "facts": ["CEC-QS1", "batch-level testing", "Brightwater Composites"]
+  },
+  {
+    "id": "agg-1",
+    "kind": "aggregation",
+    "question": "How many projects did the Blue Transition Fund support in 2023, and which received the most money?",
+    "reference": "Five projects shared 22 million euros; the largest award, 9 million euros, went to Aurelia Offshore Wind's floating wind demonstrator at Corran Bank.",
+    "facts": ["five projects", "22 million", "Aurelia Offshore Wind", "9 million", "Corran Bank"]
+  },
+  {
+    "id": "global-1",
+    "kind": "global",
+    "question": "What are the main themes across these documents?",
+    "reference": "Commercialising tidal power with the Kestrel-2 and the Saltmarsh Array; supply chain quality after the blade defect (CEC-QS1); grid constraints at Dunmore delaying expansion; marine wildlife monitoring of harbour porpoises; and funding and governance through Halcyon Ventures and the consortium's Blue Transition Fund.",
+    "facts": ["tidal", "supply chain quality", "grid constraints", "wildlife monitoring", "funding"]
+  },
+  {
+    "id": "global-2",
+    "kind": "global",
+    "question": "Summarise how money flows between the organisations in these documents.",
+    "reference": "Halcyon Ventures invested 48 million euros in Meridian's Series B. The consortium's Blue Transition Fund gave 22 million euros: 9m to Aurelia Offshore Wind, 6.5m to Meridian's Saltmarsh Array, 3m to the University of Calder, 2.5m to Westcoast Grid and 1m to community cooperatives. Meridian buys blades from Brightwater Composites and exports power through Westcoast Grid's Dunmore substation.",
+    "facts": ["48 million", "Halcyon Ventures", "6.5 million", "Brightwater Composites", "Westcoast Grid"]
+  },
+  {
+    "id": "neg-1",
+    "kind": "unanswerable",
+    "question": "What was Meridian Tidal Power's revenue in 2023?",
+    "reference": "The documents do not state Meridian's revenue. A good answer says so instead of guessing.",
+    "facts": []
+  }
+]

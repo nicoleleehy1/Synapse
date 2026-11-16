@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     # ── HTTP ──────────────────────────────────────────────────────────────────
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
     upload_dir: str = "data/uploads"
+    # Keep uploaded PDFs so answers and flashcards can open the source page with the
+    # passage highlighted. Set false to discard each PDF once it has been processed.
+    retain_pdfs: bool = True
+    pdf_dir: str = "data/pdfs"
+
+    # ── Study ─────────────────────────────────────────────────────────────────
+    desired_retention: float = 0.9
+    new_cards_per_session: int = 20
     trust_proxy_headers: bool = False
 
     @field_validator("cors_origins", mode="before")

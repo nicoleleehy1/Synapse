@@ -11,12 +11,15 @@ import pytest
 import pytest_asyncio
 
 from app.models import Entity, Relationship, TextChunk
+from app.services.agent import GraphRAGAgent
+from app.services.communities import CommunityBuilder, CommunityScheduler
 from app.services.embeddings import HashEmbedder
 from app.services.extractor import Extractor, _ExtractionPayload
 from app.services.graph_store import GraphStore, ReadOnlyViolation
 from app.services.pipeline import Pipeline
 from app.services.retriever import Retriever
-from tests.fakes import FakeAnthropic
+from app.services.study import StudyService, _CardBatch
+from tests.fakes import FakeAnthropic, ScriptedAnthropic, text_block, tool_block
 
 pytestmark = [
     pytest.mark.integration,
@@ -36,7 +39,9 @@ async def store():
 
 @pytest_asyncio.fixture(autouse=True)
 async def clean(store):
-    await store._run("MATCH (n) WHERE n:Entity OR n:Chunk OR n:Document DETACH DELETE n")
+    await store._run(
+        "MATCH (n) WHERE n:Entity OR n:Chunk OR n:Document OR n:Community OR n:Card OR n:Review DETACH DELETE n"
+    )
     yield
 
 
@@ -182,9 +187,27 @@ async def client(store):
     app.state.graph_store = store
     app.state.pipeline = Pipeline(graph_store=store, extractor=Extractor(client=fake), embedder=EMB)
     app.state.retriever = Retriever(graph_store=store, client=fake, embedder=EMB)
+    app.state.agent = GraphRAGAgent(
+        graph_store=store,
+        embedder=EMB,
+        client=ScriptedAnthropic(
+            [
+                [tool_block("t1", "search_passages", {"query": "how neurons connect", "top_k": 3})],
+                [text_block("Neurons connect via synapses [1].")],
+            ]
+        ),
+    )
+    app.state.study = StudyService(graph_store=store, client=FakeAnthropic(parse_fn=_fake_cards))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+def _fake_cards(kwargs):
+    n = kwargs["messages"][0]["content"].count("<fact ")
+    cards = [{"fact": i, "front": f"Question {i}?", "back": f"Answer {i}."} for i in range(1, n + 1)]
+    cards.append({"fact": 99, "front": "out of range", "back": "dropped"})
+    return _CardBatch.model_validate({"cards": cards})
 
 
 async def test_upload_stream_query_delete(client, pdf_factory):
@@ -221,16 +244,46 @@ async def test_upload_stream_query_delete(client, pdf_factory):
 
     await asyncio.sleep(1.5)
     ans = (await client.post("/query/", json={"query": "How do neurons connect?"})).json()
-    assert ans["answer"].startswith("Neurons connect")
-    assert ans["sources"] and ans["graph_context"]["nodes"]
+    assert ans["answer"] == "Neurons connect via synapses [1]."
+    assert ans["sources"] and ans["graph_context"]["nodes"] and ans["steps"] == 1
 
     assert (
         await client.post("/graph/cypher", json={"cypher": "MATCH (n) DETACH DELETE n"})
     ).status_code == 403
     assert (await client.post("/graph/cypher", json={"cypher": "MATCH (n RETURN n"})).status_code == 400
 
+    # Source viewer: the PDF is kept and each passage knows where it sits on the page.
+    pdf_resp = await client.get(f"/documents/{doc_id}/pdf")
+    assert pdf_resp.status_code == 200 and pdf_resp.content.startswith(b"%PDF-")
+    chunk = (await client.get(f"/documents/chunks/{ans['sources'][0]['chunk_id']}")).json()
+    assert chunk["has_pdf"] and chunk["highlights"]
+    assert all(0 <= h["x0"] < h["x1"] <= 1 for h in chunk["highlights"])
+    assert (await client.get("/documents/chunks/nope")).status_code == 404
+
+    # Flashcards from the graph's relationships, then one review.
+    created = (await client.post("/study/generate", json={"document_id": doc_id, "count": 5})).json()
+    assert created["created"] == status["relationship_count"]
+    due = (await client.get("/study/due")).json()
+    assert len(due) == created["created"] and due[0]["state"] == "new"
+    assert due[0]["intervals"]["1"] < due[0]["intervals"]["3"] < due[0]["intervals"]["4"]
+    reviewed = (await client.post(f"/study/cards/{due[0]['id']}/review", json={"rating": 3})).json()
+    assert reviewed["state"] == "review" and reviewed["reps"] == 1
+    assert (await client.post("/study/cards/nope/review", json={"rating": 3})).status_code == 404
+    assert (await client.post(f"/study/cards/{due[0]['id']}/review", json={"rating": 5})).status_code == 422
+    mastery = {m["entity_id"]: m for m in (await client.get("/study/mastery")).json()}
+    assert set(due[0]["entity_ids"]) <= set(mastery)
+    assert max(m["mastery"] for m in mastery.values()) == pytest.approx(1.0, abs=0.01)
+    stats = (await client.get("/study/stats", params={"tz_offset_minutes": -480})).json()
+    assert stats["reviewed_today"] == 1 and stats["streak_days"] == 1 and stats["activity"][-1] == 1
+    assert stats["retention_30d"] == 1.0
+
+    from app.services.pipeline import stored_pdf_path
+
+    assert stored_pdf_path(doc_id).exists()
     assert (await client.delete(f"/documents/{doc_id}")).status_code == 200
     assert (await client.get(f"/documents/{doc_id}/status")).status_code == 404
+    assert not stored_pdf_path(doc_id).exists()
+    assert (await client.get("/study/due")).json() == []  # cards go with their document
 
 
 async def test_upload_validation(client, tmp_path):
@@ -246,3 +299,194 @@ async def test_upload_validation(client, tmp_path):
 async def test_health(client):
     r = await client.get("/health")
     assert r.json() == {"status": "ok", "neo4j": True}
+
+
+# ── Cross-document resolution ─────────────────────────────────────────────────
+
+
+async def test_entities_merge_across_documents(store):
+    from app.models import DocumentStatus
+
+    fake = FakeAnthropic(parse_fn=_fake_extraction)
+    pipe = Pipeline(graph_store=store, extractor=Extractor(client=fake), embedder=EMB)
+    ids = []
+    for name, text in [
+        ("one.pdf", "Neurons and Synapses work together. " * 30),
+        ("two.pdf", "Synapses release Neurotransmitters. " * 30),
+    ]:
+        st = DocumentStatus(document_id=name.split(".")[0], filename=name, status="queued")
+        await store.save_document(st)
+        ids.append(st.document_id)
+        import pathlib
+        import tempfile
+
+        from tests.conftest import make_pdf
+
+        p = pathlib.Path(tempfile.mkdtemp()) / name
+        make_pdf(p, [text])
+        assert (await pipe.process(p, st)).status == "complete"
+        await asyncio.sleep(1.2)  # let the entity vector index catch up before the next doc
+
+    rows = await store._run("MATCH (e:Entity {name: 'Synapses'}) RETURN e.document_ids AS docs")
+    assert len(rows) == 1, "Synapses should be one node shared by both documents"
+    assert sorted(rows[0]["docs"]) == ["one", "two"]
+    both = await store.get_full_graph()
+    assert {n.name for n in both.nodes} == {"Neurons", "Synapses", "Neurotransmitters"}
+
+    await store.delete_document("one")
+    left = await store.get_full_graph()
+    assert {n.name for n in left.nodes} == {"Synapses", "Neurotransmitters"}
+    assert len(left.edges) == 1  # the one.pdf relationship went with its document
+    await store.delete_document("two")
+    assert (await store.get_full_graph()).nodes == []
+
+
+# ── Communities ───────────────────────────────────────────────────────────────
+
+
+async def _seed_clusters(store):
+    await _seed_document(store)
+    groups = [["Ada", "Babbage", "Engine", "Punch Cards"], ["Curie", "Radium", "Polonium", "Sorbonne"]]
+    ents, rels = [], []
+    for g in groups:
+        es = [Entity(name=n, type="CONCEPT", source_document="d1.pdf", document_id="d1") for n in g]
+        ents += es
+        for i in range(len(es)):
+            for j in range(i + 1, len(es)):
+                rels.append(
+                    Relationship(
+                        source_entity_id=es[i].id,
+                        target_entity_id=es[j].id,
+                        type="RELATED_TO",
+                        source_chunk_id="",
+                        source_document="d1.pdf",
+                        document_id="d1",
+                    )
+                )
+    rels.append(
+        Relationship(
+            source_entity_id=ents[0].id,
+            target_entity_id=ents[4].id,
+            type="INSPIRED",
+            confidence=0.1,
+            source_chunk_id="",
+            source_document="d1.pdf",
+            document_id="d1",
+        )
+    )
+    await store.write_graph(ents, list(EMB.embed([e.name for e in ents])), rels)
+    return ents
+
+
+def _fake_report(kwargs):
+    from app.services.communities import _Report
+
+    text = kwargs["messages"][0]["content"]
+    title = "Computing pioneers" if "Babbage" in text else "Radioactivity research"
+    return _Report(title=title, summary=f"About {title.lower()}.", findings=["finding one", "finding two"])
+
+
+async def test_community_build_search_and_incremental_reuse(store):
+    await _seed_clusters(store)
+    fake = FakeAnthropic(parse_fn=_fake_report)
+    builder = CommunityBuilder(graph_store=store, client=fake, embedder=EMB)
+    assert await builder.rebuild() == 2
+    calls = len(fake.messages.calls)
+
+    topics = await store.list_communities()
+    assert {t["title"] for t in topics} == {"Computing pioneers", "Radioactivity research"}
+    assert all(len(t["member_ids"]) == 4 for t in topics)
+
+    await asyncio.sleep(1.2)
+    hits = await store.search_communities(EMB.embed(["computing pioneers"])[0], k=1)
+    assert hits[0]["title"] == "Computing pioneers"
+    assert "Babbage" in hits[0]["top_entities"]
+
+    # Nothing changed: no new LLM calls.
+    assert await builder.rebuild() == 0
+    assert len(fake.messages.calls) == calls
+
+    sched = CommunityScheduler(builder)
+    sched.request()
+    sched.request()
+    await sched.wait()
+    assert len(fake.messages.calls) == calls
+
+
+# ── Agent ─────────────────────────────────────────────────────────────────────
+
+
+async def test_agent_plans_retrieval_cites_and_self_corrects(store):
+    ents = await _seed_clusters(store)
+    chunk = _chunk(0, "Ada Lovelace wrote the first program for Babbage's Analytical Engine.")
+    await store.write_chunks([chunk], EMB.embed([chunk.text]))
+    await store._run(
+        "MATCH (e:Entity {name: 'Ada'}), (c:Chunk {id: $cid}) MERGE (e)-[:MENTIONED_IN]->(c)", cid=chunk.id
+    )
+    await asyncio.sleep(1.2)
+
+    def explore_turn(kwargs):
+        # React to the previous tool result like a real model: pick the id it was given.
+        last = kwargs["messages"][-1]["content"]
+        listing = next(r["content"] for r in last if r["tool_use_id"] == "t2")
+        ada_id = listing.split("id=")[1].split(" ")[0]
+        return [
+            tool_block("t3", "explore_entities", {"entity_ids": [ada_id], "depth": 1}),
+            tool_block("t4", "run_cypher", {"cypher": "MATCH (n) DETACH DELETE n", "purpose": "oops"}),
+        ]
+
+    client = ScriptedAnthropic(
+        [
+            [
+                tool_block("t1", "search_passages", {"query": "first program", "top_k": 3}),
+                tool_block("t2", "search_entities", {"query": "Ada"}),
+            ],
+            explore_turn,
+            [
+                tool_block(
+                    "t5",
+                    "run_cypher",
+                    {
+                        "cypher": "MATCH (e:Entity)-[:RELATES]-(o) RETURN e.name AS name, count(o) AS n ORDER BY n DESC LIMIT 3",
+                        "purpose": "most connected entities",
+                    },
+                )
+            ],
+            [text_block("Ada Lovelace wrote the first program [1].")],
+        ]
+    )
+    agent = GraphRAGAgent(graph_store=store, client=client, embedder=EMB)
+    events = [e async for e in agent.run("Who wrote the first program?")]
+    kinds = [e["type"] for e in events]
+
+    assert kinds.count("step") == 5 and kinds.count("step_result") == 5
+    results = {e["id"]: e for e in events if e["type"] == "step_result"}
+    assert results["t4"]["is_error"] and "read-only" in results["t4"]["summary"]
+    assert not results["t5"]["is_error"] and "3 rows" in results["t5"]["summary"]
+    assert (await store.get_full_graph()).nodes, "the write attempt must not have deleted anything"
+
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["answer"] == "Ada Lovelace wrote the first program [1]."
+    assert done["sources"][0]["chunk_id"] == chunk.id
+    assert ents[0].id in done["highlight_ids"]
+    assert {n["name"] for n in done["graph"]["nodes"]} >= {"Ada", "Babbage"}
+    assert done["usage"]["input_tokens"] == 400
+
+    # The errored tool result went back to the model flagged as an error.
+    turn3_msgs = client.messages.stream_calls[2]["messages"]
+    t4 = next(r for r in turn3_msgs[-1]["content"] if r["tool_use_id"] == "t4")
+    assert t4["is_error"] is True
+    # Tools were offered on every turn, with prompt caching and refusal fallbacks.
+    assert all(c["tool_choice"] == {"type": "auto"} for c in client.messages.stream_calls)
+    assert client.messages.stream_calls[0]["fallbacks"] == "default"
+
+
+async def test_agent_step_budget_forces_an_answer(store):
+    await _seed_document(store)
+    loop_turn = [tool_block("x", "search_entities", {"query": "anything"})]
+    client = ScriptedAnthropic([loop_turn] * 3 + [[text_block("Best effort answer.")]])
+    agent = GraphRAGAgent(graph_store=store, client=client, embedder=EMB, max_steps=3)
+    done = await agent.answer("loop forever")
+    assert done["answer"] == "Best effort answer."
+    assert client.messages.stream_calls[-1]["tool_choice"] == {"type": "none"}

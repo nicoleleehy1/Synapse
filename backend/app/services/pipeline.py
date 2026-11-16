@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from app.config import settings
@@ -25,12 +27,19 @@ from app.services.events import ProgressBroker
 from app.services.events import broker as default_broker
 from app.services.extractor import Extractor
 from app.services.graph_store import GraphStore
+from app.services.locator import SourceLocator
 from app.services.pdf_processor import PDFProcessor
 from app.services.resolver import EntityResolver
 
 logger = logging.getLogger(__name__)
 
+
 # Fractions of the progress bar allotted to each stage.
+def stored_pdf_path(document_id: str) -> Path:
+    # document ids are server-generated UUIDs; never build this path from user input.
+    return Path(settings.pdf_dir) / f"{document_id}.pdf"
+
+
 _P_PARSED, _P_EMBEDDED, _P_EXTRACTED, _P_RESOLVED = 0.05, 0.15, 0.85, 0.92
 
 
@@ -47,8 +56,10 @@ class Pipeline:
         broker: ProgressBroker | None = None,
         pdf: PDFProcessor | None = None,
         chunker: Chunker | None = None,
+        on_complete: Callable[[], None] | None = None,
     ) -> None:
         self._gs = graph_store
+        self._on_complete = on_complete
         self._extractor = extractor or Extractor()
         self._embedder = embedder
         self._broker = broker or default_broker
@@ -88,6 +99,8 @@ class Pipeline:
                 self._chunker.chunk_pages, pages, status.document_id, status.filename
             )
 
+            await asyncio.to_thread(self._attach_highlights, pdf_path, chunks)
+
             await self._emit(status, stage="embedding", chunk_count=len(chunks))
             vecs = await embed_async([c.text for c in chunks], self.embedder)
             await self._gs.write_chunks(chunks, vecs)
@@ -106,6 +119,7 @@ class Pipeline:
                 return ents, [resolver.embedding_for(e) for e in ents], rels
 
             entities, ent_vecs, relationships = await asyncio.to_thread(_resolve)
+            merged = await self._link_to_existing(entities, ent_vecs, relationships, status.document_id)
 
             await self._emit(
                 status,
@@ -116,14 +130,21 @@ class Pipeline:
             )
             await self._gs.write_graph(entities, ent_vecs, relationships)
 
+            if settings.retain_pdfs:
+                await asyncio.to_thread(self._keep_pdf, pdf_path, status.document_id)
+                await self._gs.set_document_pdf(status.document_id, True)
+
             await self._emit(status, status="complete", stage="done", progress=1.0)
             logger.info(
-                "Processed %s: %d chunks, %d entities, %d relationships",
+                "Processed %s: %d chunks, %d entities (%d linked to other documents), %d relationships",
                 status.filename,
                 len(chunks),
                 len(entities),
+                merged,
                 len(relationships),
             )
+            if self._on_complete:
+                self._on_complete()
         except Exception as exc:  # noqa: BLE001 - surface any failure to the user
             logger.exception("Pipeline failed for %s", status.filename)
             try:
@@ -131,6 +152,48 @@ class Pipeline:
             except Exception:  # noqa: BLE001 - DB unreachable; the restart sweep will fail the job
                 logger.exception("Could not record failure for %s", status.document_id)
         return status
+
+    @staticmethod
+    def _attach_highlights(pdf_path: str | Path, chunks: list[TextChunk]) -> None:
+        """Record where each chunk sits on the page; best effort, never fails ingestion."""
+        try:
+            locator = SourceLocator(pdf_path)
+            for c in chunks:
+                c.highlights = locator.locate(c.text, c.page_number)
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not locate passages in %s", pdf_path)
+
+    @staticmethod
+    def _keep_pdf(pdf_path: str | Path, document_id: str) -> None:
+        dest = stored_pdf_path(document_id)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(pdf_path, dest)
+
+    async def _link_to_existing(self, entities, vecs, relationships, document_id: str) -> int:
+        """Cross-document entity resolution.
+
+        Each new canonical entity is compared (vector index, same type) against
+        entities already extracted from *other* documents; a match adopts the
+        existing node's id, so the write merges provenance into it instead of
+        creating a duplicate. Returns the number of entities linked.
+        """
+        rows = [
+            {"idx": i, "type": e.type, "embedding": v.tolist()}
+            for i, (e, v) in enumerate(zip(entities, vecs, strict=True))
+            if v is not None
+        ]
+        matches = await self._gs.match_existing_entities(
+            rows, settings.entity_similarity_threshold, exclude_document=document_id
+        )
+        remap: dict[str, str] = {}
+        for idx, existing_id in matches.items():
+            remap[entities[idx].id] = existing_id
+            entities[idx].id = existing_id
+        if remap:
+            for r in relationships:
+                r.source_entity_id = remap.get(r.source_entity_id, r.source_entity_id)
+                r.target_entity_id = remap.get(r.target_entity_id, r.target_entity_id)
+        return len(remap)
 
     async def _extract_all(self, chunks: list[TextChunk], status: DocumentStatus) -> list[ExtractionResult]:
         sem = asyncio.Semaphore(settings.extraction_concurrency)
