@@ -83,7 +83,11 @@ def get_embedder() -> Embedder:
     if _embedder is None:
         with _embedder_lock:
             if _embedder is None:
-                _embedder = FastEmbedEmbedder()
+                _embedder = (
+                    HashEmbedder(settings.embedding_dim)
+                    if settings.embedding_provider == "hash"
+                    else FastEmbedEmbedder()
+                )
     return _embedder
 
 

@@ -16,6 +16,7 @@ import {
   createNode, createEdge, updateNode as apiUpdateNode,
   deleteNode, deleteEdge,
   getNodeOrphans, getEdgeOrphanTarget, getEntityNeighbourhood,
+  listDocuments,
 } from './api/client'
 import type { DocumentStatus, FGNode, FGLink, GraphNode } from './types/graph'
 import { SAMPLE_GRAPH } from './data/sampleGraph'
@@ -63,6 +64,11 @@ export default function App() {
     })
     if (canvasContainerRef.current) obs.observe(canvasContainerRef.current)
     return () => obs.disconnect()
+  }, [])
+
+  // Documents persist server-side: restore the list on load
+  useEffect(() => {
+    listDocuments().then(setDocuments).catch(() => { /* backend offline: sample graph still works */ })
   }, [])
 
   // Document lifecycle
@@ -263,7 +269,7 @@ export default function App() {
       {/* ── Sidebar ── */}
       <aside className="w-[320px] shrink-0 flex flex-col border-r border-border overflow-y-auto">
         <div className="px-7 pt-8 pb-6 border-b border-border">
-          <h1 className="text-xl font-bold tracking-tight text-foreground">Knowledge Graph</h1>
+          <h1 className="text-xl font-bold tracking-tight text-foreground">Synapse</h1>
           <p className="text-xs text-chart-2 mt-1">PDF → entity graph · semantic search</p>
         </div>
 
@@ -279,7 +285,7 @@ export default function App() {
               <SectionLabel>Indexed documents</SectionLabel>
               <ul className="space-y-2">
                 {completedDocs.map(doc => (
-                  <li key={doc.document_id} className="border border-border rounded px-3 py-2.5 flex items-start gap-2">
+                  <li key={doc.document_id} className="border border-border rounded-sm px-3 py-2.5 flex items-start gap-2">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-foreground truncate" title={doc.filename}>
                         {doc.filename}
@@ -312,13 +318,13 @@ export default function App() {
                   <button
                     onClick={() => loadFullGraph()}
                     disabled={graphLoading}
-                    className="text-xs text-chart-3 border border-border rounded px-3 py-1.5 hover:border-chart-3 hover:text-foreground transition-colors disabled:opacity-40"
+                    className="text-xs text-chart-3 border border-border rounded-sm px-3 py-1.5 hover:border-chart-3 hover:text-foreground transition-colors disabled:opacity-40"
                   >
                     {graphLoading ? 'Loading…' : 'Reload'}
                   </button>
                   <button
                     onClick={() => { resetGraph(); setSelectedNode(null) }}
-                    className="text-xs text-chart-2 border border-border rounded px-3 py-1.5 hover:border-chart-3 hover:text-foreground transition-colors"
+                    className="text-xs text-chart-2 border border-border rounded-sm px-3 py-1.5 hover:border-chart-3 hover:text-foreground transition-colors"
                   >
                     Clear
                   </button>
@@ -345,7 +351,7 @@ export default function App() {
             </div>
             <button
               onClick={() => loadSample(SAMPLE_GRAPH)}
-              className="pointer-events-auto text-xs text-chart-3 border border-border rounded px-4 py-2 hover:border-chart-3 hover:text-foreground transition-colors"
+              className="pointer-events-auto text-xs text-chart-3 border border-border rounded-sm px-4 py-2 hover:border-chart-3 hover:text-foreground transition-colors"
             >
               Load sample graph
             </button>
@@ -353,7 +359,7 @@ export default function App() {
         ) : (
           <>
             {/* View switcher */}
-            <div className="absolute top-4 right-4 z-20 flex gap-0.5 bg-background border border-border rounded p-0.5 shadow-sm">
+            <div className="absolute top-4 right-4 z-20 flex gap-0.5 bg-background border border-border rounded-sm p-0.5 shadow-xs">
               <button
                 onClick={() => setView('graph')}
                 title="Graph view"

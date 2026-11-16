@@ -5,7 +5,34 @@ import type {
   OrphanInfo, EdgeOrphanInfo,
 } from '../types/graph'
 
-const api = axios.create({ baseURL: '/api' })
+/** API origin: same-origin `/api` behind nginx/Vite, or an absolute URL in split deployments. */
+export const API_BASE = resolveApiBase(import.meta.env.VITE_API_URL)
+
+export function resolveApiBase(raw: string | undefined): string {
+  const v = raw?.trim().replace(/\/$/, '')
+  if (!v) return '/api'
+  // Hosting platforms often expose a bare hostname; assume HTTPS.
+  return /^https?:\/\//.test(v) || v.startsWith('/') ? v : `https://${v}`
+}
+
+const api = axios.create({ baseURL: API_BASE })
+
+/** Human-readable message from an API error (FastAPI puts it in `detail`). */
+export function errorMessage(e: unknown, fallback = 'Something went wrong'): string {
+  if (axios.isAxiosError(e)) {
+    const detail = e.response?.data?.detail
+    if (typeof detail === 'string') return detail
+    if (e.response?.status === 413) return 'That PDF is too large.'
+    if (e.response?.status === 429) return 'Rate limit reached. Please try again later.'
+    return e.message || fallback
+  }
+  return e instanceof Error ? e.message : fallback
+}
+
+/** URL of the Server-Sent Events stream for a document's processing progress. */
+export function documentEventsUrl(documentId: string): string {
+  return `${API_BASE}/documents/${encodeURIComponent(documentId)}/events`
+}
 
 export async function uploadPDF(file: File): Promise<{ document_id: string; filename: string }> {
   const form = new FormData()

@@ -19,8 +19,8 @@ def test_rate_limiter_window():
 
 
 def test_cors_origins_accept_comma_separated_env(monkeypatch):
-    monkeypatch.setenv("CORS_ORIGINS", "https://a.example, https://b.example")
-    assert Settings().cors_origins == ["https://a.example", "https://b.example"]
+    monkeypatch.setenv("CORS_ORIGINS", "https://a.example, b.example,http://localhost:5173")
+    assert Settings().cors_origins == ["https://a.example", "https://b.example", "http://localhost:5173"]
 
 
 def test_pdf_processor_extracts_pages(pdf_factory):

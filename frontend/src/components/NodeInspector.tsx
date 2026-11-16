@@ -38,12 +38,12 @@ export function NodeInspector({
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0 pr-3">
             <span
-              className="inline-block text-2xs font-medium px-1.5 py-0.5 rounded-sm mb-2"
+              className="inline-block text-2xs font-medium px-1.5 py-0.5 rounded-xs mb-2"
               style={{ backgroundColor: typeBg, color: node.textColor ?? '#ffffff' }}
             >
               {node.type}
             </span>
-            <h3 className="text-base font-semibold text-foreground leading-tight break-words">
+            <h3 className="text-base font-semibold text-foreground leading-tight wrap-break-word">
               {node.name}
             </h3>
           </div>
@@ -91,20 +91,20 @@ export function NodeInspector({
       <div className="px-5 py-4 border-t border-border space-y-2">
         <button
           onClick={() => onExpand(node)}
-          className="w-full py-2 border border-foreground text-foreground text-sm font-medium rounded hover:bg-foreground hover:text-background transition-colors"
+          className="w-full py-2 border border-foreground text-foreground text-sm font-medium rounded-sm hover:bg-foreground hover:text-background transition-colors"
         >
           Expand neighbourhood
         </button>
         <button
           onClick={() => onAddEdge(node)}
-          className="w-full py-2 border border-border text-chart-3 text-sm rounded hover:border-chart-3 hover:text-foreground transition-colors flex items-center justify-center gap-1.5"
+          className="w-full py-2 border border-border text-chart-3 text-sm rounded-sm hover:border-chart-3 hover:text-foreground transition-colors flex items-center justify-center gap-1.5"
         >
           <Plus size={13} />
           Add relationship
         </button>
         <button
           onClick={() => onDeleteNode(node)}
-          className="w-full py-2 text-chart-2 text-sm rounded hover:text-foreground transition-colors flex items-center justify-center gap-1.5"
+          className="w-full py-2 text-chart-2 text-sm rounded-sm hover:text-foreground transition-colors flex items-center justify-center gap-1.5"
         >
           <Trash2 size={13} />
           Delete entity
@@ -134,7 +134,7 @@ function RelSection({
               : typeof l.source === 'object' ? l.source.id : l.source
           const other = nodeMap.get(otherId)
           return (
-            <li key={l.id} className="border border-border rounded p-2.5 space-y-1 group relative">
+            <li key={l.id} className="border border-border rounded-sm p-2.5 space-y-1 group relative">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-2xs font-mono font-medium text-foreground truncate">
                   {l.type}

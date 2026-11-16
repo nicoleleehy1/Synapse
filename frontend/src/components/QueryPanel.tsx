@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Loader2, ChevronDown, ChevronUp } from 'lucide-react'
-import { queryGraph } from '../api/client'
+import { errorMessage, queryGraph } from '../api/client'
 import type { QueryResponse, GraphData } from '../types/graph'
 
 interface Props {
@@ -26,7 +26,7 @@ export function QueryPanel({ documentId, onGraphContext }: Props) {
       setResult(res)
       onGraphContext(res.graph_context)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Query failed')
+      setError(errorMessage(e, 'Query failed'))
     } finally {
       setLoading(false)
     }
@@ -37,7 +37,7 @@ export function QueryPanel({ documentId, onGraphContext }: Props) {
       {/* Input row */}
       <div className="flex gap-2">
         <input
-          className="flex-1 border border-border rounded px-3 py-2 text-sm text-foreground placeholder-chart-2 focus:outline-none focus:border-chart-3 bg-background transition-colors"
+          className="flex-1 min-w-0 border border-border rounded-sm px-3 py-2 text-sm text-foreground placeholder-chart-2 focus:outline-hidden focus:border-chart-3 bg-background transition-colors"
           placeholder="Ask anything about your document…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -47,14 +47,14 @@ export function QueryPanel({ documentId, onGraphContext }: Props) {
         <button
           onClick={submit}
           disabled={loading || !query.trim()}
-          className="px-4 py-2 bg-foreground text-background text-sm font-medium rounded hover:bg-chart-4 disabled:opacity-30 transition-colors whitespace-nowrap"
+          className="px-4 py-2 bg-foreground text-background text-sm font-medium rounded-sm hover:bg-chart-4 disabled:opacity-30 transition-colors whitespace-nowrap"
         >
           {loading ? <Loader2 size={14} className="animate-spin" /> : 'Ask'}
         </button>
       </div>
 
       {error && (
-        <p className="text-xs text-foreground border border-border rounded px-3 py-2 bg-secondary">
+        <p className="text-xs text-foreground border border-border rounded-sm px-3 py-2 bg-secondary">
           {error}
         </p>
       )}
@@ -91,7 +91,7 @@ export function QueryPanel({ documentId, onGraphContext }: Props) {
               {showSources && (
                 <div className="mt-2 space-y-2">
                   {result.sources.map((s, i) => (
-                    <div key={s.chunk_id} className="border border-border rounded p-3">
+                    <div key={s.chunk_id} className="border border-border rounded-sm p-3">
                       <div className="flex justify-between mb-1">
                         <span className="text-2xs text-chart-2">
                           [{i + 1}] {s.document_name} · p.{s.page_number}
@@ -126,7 +126,7 @@ export function QueryPanel({ documentId, onGraphContext }: Props) {
                 }
               </button>
               {showCypher && (
-                <pre className="mt-2 border border-border rounded p-3 text-2xs font-mono text-chart-3 overflow-x-auto whitespace-pre-wrap bg-secondary">
+                <pre className="mt-2 border border-border rounded-sm p-3 text-2xs font-mono text-chart-3 overflow-x-auto whitespace-pre-wrap bg-secondary">
                   {result.cypher_used}
                 </pre>
               )}

@@ -71,10 +71,10 @@ export function TableView({ graph, selectedNodeId, onNodeSelect, onEditNode, onD
       return true
     })
     return [...filtered].sort((a, b) => {
-      let cmp = 0
-      if (sortKey === 'name') cmp = a.name.localeCompare(b.name)
-      else if (sortKey === 'type') cmp = a.type.localeCompare(b.type)
-      else cmp = (connCount.get(a.id) ?? 0) - (connCount.get(b.id) ?? 0)
+      const cmp =
+        sortKey === 'name' ? a.name.localeCompare(b.name)
+        : sortKey === 'type' ? a.type.localeCompare(b.type)
+        : (connCount.get(a.id) ?? 0) - (connCount.get(b.id) ?? 0)
       return sortDir === 'asc' ? cmp : -cmp
     })
   }, [graph.nodes, search, filterTypes, sortKey, sortDir, connCount])
@@ -89,7 +89,8 @@ export function TableView({ graph, selectedNodeId, onNodeSelect, onEditNode, onD
   const toggleType = (type: string) => {
     setFilterTypes(prev => {
       const next = new Set(prev)
-      next.has(type) ? next.delete(type) : next.add(type)
+      if (next.has(type)) next.delete(type)
+      else next.add(type)
       return next
     })
   }
@@ -123,7 +124,7 @@ export function TableView({ graph, selectedNodeId, onNodeSelect, onEditNode, onD
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Filter…"
-            className="pl-8 pr-3 py-1.5 text-xs bg-transparent border border-border rounded text-foreground placeholder:text-chart-2 focus:outline-none focus:border-chart-3 w-44"
+            className="pl-8 pr-3 py-1.5 text-xs bg-transparent border border-border rounded-sm text-foreground placeholder:text-chart-2 focus:outline-hidden focus:border-chart-3 w-44"
           />
         </div>
 
@@ -136,7 +137,7 @@ export function TableView({ graph, selectedNodeId, onNodeSelect, onEditNode, onD
               <button
                 key={type}
                 onClick={() => toggleType(type)}
-                className="text-2xs px-2 py-0.5 rounded transition-all"
+                className="text-2xs px-2 py-0.5 rounded-sm transition-all"
                 style={{
                   background: active ? s.bg : 'transparent',
                   color: active ? s.text : '#a3a3a3',
@@ -217,7 +218,7 @@ export function TableView({ graph, selectedNodeId, onNodeSelect, onEditNode, onD
                           if (e.key === 'Escape') setEditing(null)
                         }}
                         onClick={e => e.stopPropagation()}
-                        className="w-full bg-transparent border-b border-chart-3 outline-none text-foreground"
+                        className="w-full bg-transparent border-b border-chart-3 outline-hidden text-foreground"
                       />
                     ) : (
                       <span className="block truncate">{node.name}</span>
@@ -241,13 +242,13 @@ export function TableView({ graph, selectedNodeId, onNodeSelect, onEditNode, onD
                         onBlur={() => setEditing(null)}
                         onKeyDown={e => { if (e.key === 'Escape') setEditing(null) }}
                         onClick={e => e.stopPropagation()}
-                        className="bg-background border border-border rounded text-xs text-foreground outline-none py-0.5 px-1"
+                        className="bg-background border border-border rounded-sm text-xs text-foreground outline-hidden py-0.5 px-1"
                       >
                         {ENTITY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                       </select>
                     ) : (
                       <span
-                        className="inline-block px-1.5 py-0.5 rounded text-2xs font-medium"
+                        className="inline-block px-1.5 py-0.5 rounded-sm text-2xs font-medium"
                         style={{ background: badge.bg, color: badge.text }}
                       >
                         {node.type}
@@ -272,7 +273,7 @@ export function TableView({ graph, selectedNodeId, onNodeSelect, onEditNode, onD
                         }}
                         onClick={e => e.stopPropagation()}
                         rows={2}
-                        className="w-full bg-transparent border-b border-chart-3 outline-none text-foreground resize-none"
+                        className="w-full bg-transparent border-b border-chart-3 outline-hidden text-foreground resize-none"
                       />
                     ) : node.description ? (
                       <span className="block truncate">{node.description}</span>
@@ -299,7 +300,7 @@ export function TableView({ graph, selectedNodeId, onNodeSelect, onEditNode, onD
                   <td className="px-2 py-2" onClick={e => e.stopPropagation()}>
                     <button
                       onClick={() => { onDeleteNode(node.id); if (isSelected) onNodeSelect(null) }}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-chart-2 hover:text-foreground p-1 rounded"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity text-chart-2 hover:text-foreground p-1 rounded-sm"
                       title="Delete entity"
                     >
                       <Trash2 size={12} />

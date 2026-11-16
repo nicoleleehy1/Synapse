@@ -52,8 +52,8 @@ function drawRoundedRect(
 }
 
 // ── Shared overlay button style ───────────────────────────────────────────────
-const ICON_BTN = 'w-5 h-5 flex items-center justify-center bg-foreground text-background rounded-sm hover:bg-chart-4 transition-colors'
-const DANGER_BTN = 'w-5 h-5 flex items-center justify-center bg-foreground text-background rounded-sm hover:bg-red-500 transition-colors'
+const ICON_BTN = 'w-5 h-5 flex items-center justify-center bg-foreground text-background rounded-xs hover:bg-chart-4 transition-colors'
+const DANGER_BTN = 'w-5 h-5 flex items-center justify-center bg-foreground text-background rounded-xs hover:bg-red-500 transition-colors'
 
 // ── Inline forms ──────────────────────────────────────────────────────────────
 
@@ -82,7 +82,7 @@ function NodeForm({ initial, onConfirm, onClose }: {
 
   return (
     <div
-      className="bg-background border border-border rounded shadow-md p-2.5 min-w-[176px] space-y-2"
+      className="bg-background border border-border rounded-sm shadow-md p-2.5 min-w-[176px] space-y-2"
       onMouseDown={e => e.stopPropagation()}
     >
       <input
@@ -94,19 +94,19 @@ function NodeForm({ initial, onConfirm, onClose }: {
           else if (e.key === 'Escape') { doneRef.current = true; onClose() }
         }}
         placeholder="Entity name…"
-        className="text-xs w-full outline-none bg-transparent text-foreground placeholder:text-chart-2"
+        className="text-xs w-full outline-hidden bg-transparent text-foreground placeholder:text-chart-2"
       />
       <select
         value={type}
         onChange={e => setType(e.target.value)}
-        className="text-xs w-full outline-none bg-background text-foreground border border-border rounded px-1 py-0.5 cursor-pointer"
+        className="text-xs w-full outline-hidden bg-background text-foreground border border-border rounded-sm px-1 py-0.5 cursor-pointer"
       >
         {ENTITY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
       </select>
       <div className="flex gap-1.5 pt-0.5">
         <button
           onClick={confirm}
-          className="text-2xs px-2.5 py-1 bg-foreground text-background rounded hover:opacity-80 font-medium"
+          className="text-2xs px-2.5 py-1 bg-foreground text-background rounded-sm hover:opacity-80 font-medium"
         >
           {initial ? 'Save' : 'Add'}
         </button>
@@ -144,7 +144,7 @@ function EdgeLabelPopover({ initial = '', onConfirm, onClose }: {
 
   return (
     <div
-      className="bg-background border border-border rounded shadow-md px-2.5 py-1.5 min-w-[140px]"
+      className="bg-background border border-border rounded-sm shadow-md px-2.5 py-1.5 min-w-[140px]"
       onMouseDown={e => e.stopPropagation()}
     >
       <input
@@ -157,7 +157,7 @@ function EdgeLabelPopover({ initial = '', onConfirm, onClose }: {
         }}
         onBlur={confirm}
         placeholder="RELATED_TO"
-        className="text-xs w-full outline-none bg-transparent text-foreground font-mono placeholder:text-chart-2"
+        className="text-xs w-full outline-hidden bg-transparent text-foreground font-mono placeholder:text-chart-2"
       />
     </div>
   )
@@ -186,7 +186,7 @@ export function GraphCanvas({
   const selectedEdgeRef = useRef<FGLink | null>(null)
 
   // Hover hide timer (node → edge handle)
-  const hideTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   // Screen positions for overlays (updated via rAF)
   const [edgeHandlePos, setEdgeHandlePos] = useState<{ x: number; y: number } | null>(null)
@@ -630,7 +630,7 @@ export function GraphCanvas({
         <div className="absolute top-4 left-4 z-30">
           <button
             onClick={onDrillUp}
-            className="flex items-center gap-1 text-xs text-chart-3 border border-border rounded px-2.5 py-1.5 bg-background hover:border-chart-3 hover:text-foreground transition-colors"
+            className="flex items-center gap-1 text-xs text-chart-3 border border-border rounded-sm px-2.5 py-1.5 bg-background hover:border-chart-3 hover:text-foreground transition-colors"
           >
             <ChevronLeft size={12} />
             {drillStack[drillStack.length - 1].focalNodeName}
@@ -644,7 +644,7 @@ export function GraphCanvas({
           className="fixed z-50 pointer-events-none"
           style={{ left: (edgeMidPos?.x ?? 0) + 14, top: (edgeMidPos?.y ?? 0) - 32 }}
         >
-          <div className="bg-foreground text-background text-xs font-medium px-2.5 py-1.5 rounded whitespace-nowrap">
+          <div className="bg-foreground text-background text-xs font-medium px-2.5 py-1.5 rounded-sm whitespace-nowrap">
             <span className="font-mono">{hoveredLink.type}</span>
             {hoveredLink.description && (
               <span className="text-chart-1 font-normal ml-1.5 max-w-[200px] truncate inline-block align-bottom">

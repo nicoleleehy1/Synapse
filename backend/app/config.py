@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     llm_fallbacks: bool = True
 
     # ── Embeddings ────────────────────────────────────────────────────────────
+    # "hash" is a dependency-free offline embedder for local development/tests only.
+    embedding_provider: str = "fastembed"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dim: int = 384
     embedding_cache_dir: str | None = None
@@ -52,7 +54,10 @@ class Settings(BaseSettings):
     @classmethod
     def _split_origins(cls, v: object) -> object:
         if isinstance(v, str):
-            return [o.strip() for o in v.split(",") if o.strip()]
+            v = [o.strip() for o in v.split(",") if o.strip()]
+        if isinstance(v, list):
+            # Hosting platforms often inject bare hostnames; assume HTTPS.
+            return [o if o.startswith(("http://", "https://")) else f"https://{o}" for o in v]
         return v
 
     @property
