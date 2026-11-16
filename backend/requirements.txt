@@ -1,26 +1,20 @@
-fastapi==0.115.5
-uvicorn[standard]==0.32.1
-python-multipart==0.0.12
-pydantic==2.10.3
-pydantic-settings==2.6.1
+# Web
+fastapi==0.163.1
+uvicorn[standard]==0.54.0
+python-multipart==0.0.34
+sse-starlette==3.7.0
+pydantic==2.14.3
+pydantic-settings==2.16.3
 
-# PDF
-PyMuPDF==1.24.14
-
-# Tokenisation
-tiktoken==0.8.0
+# PDF parsing
+pymupdf==2.1
 
 # LLM
-anthropic==0.40.0
+anthropic==2.8.0
 
-# Embeddings
-sentence-transformers==3.3.1
+# Embeddings (ONNX Runtime, no PyTorch)
+fastembed==0.9.1
+numpy==2.5.5
 
-# Vector store
-faiss-cpu==1.9.0
-
-# Graph DB
-neo4j==5.27.0
-
-# Numerics
-numpy==1.26.4
+# Graph + vector store
+neo4j==6.4.1

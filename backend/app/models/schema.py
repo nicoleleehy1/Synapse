@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field
-from typing import Optional
 import uuid
+from datetime import UTC, datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 def _id() -> str:
@@ -22,8 +24,9 @@ class Entity(BaseModel):
     id: str = Field(default_factory=_id)
     name: str
     type: str  # PERSON, ORGANIZATION, CONCEPT, LOCATION, EVENT, TECHNOLOGY, OTHER
-    description: Optional[str] = None
+    description: str | None = None
     source_document: str
+    document_id: str | None = None
     source_chunk_ids: list[str] = Field(default_factory=list)
     aliases: list[str] = Field(default_factory=list)
 
@@ -33,7 +36,7 @@ class Relationship(BaseModel):
     source_entity_id: str
     target_entity_id: str
     type: str  # e.g. WORKS_AT, RELATED_TO, CAUSES, PART_OF, AUTHORED, etc.
-    description: Optional[str] = None
+    description: str | None = None
     confidence: float = Field(ge=0.0, le=1.0, default=1.0)
     source_chunk_id: str
     source_document: str
@@ -44,18 +47,34 @@ class ExtractionResult(BaseModel):
     relationships: list[Relationship]
 
 
+DocumentState = Literal["queued", "processing", "complete", "error"]
+PipelineStage = Literal[
+    "queued", "parsing", "chunking", "embedding", "extracting", "resolving", "writing", "done"
+]
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
 class DocumentStatus(BaseModel):
     document_id: str
     filename: str
-    status: str  # uploading | processing | complete | error
+    status: DocumentState
+    stage: PipelineStage = "queued"
+    progress: float = Field(default=0.0, ge=0.0, le=1.0)
+    chunks_processed: int = 0
+    created_at: str = Field(default_factory=_now)
+    updated_at: str = Field(default_factory=_now)
     page_count: int = 0
     chunk_count: int = 0
     entity_count: int = 0
     relationship_count: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # --- API models ---
+
 
 class UploadResponse(BaseModel):
     document_id: str
@@ -67,7 +86,7 @@ class GraphNode(BaseModel):
     id: str
     name: str
     type: str
-    description: Optional[str] = None
+    description: str | None = None
     source_document: str
     chunk_count: int = 0
 
@@ -77,7 +96,7 @@ class GraphEdge(BaseModel):
     source: str
     target: str
     type: str
-    description: Optional[str] = None
+    description: str | None = None
     confidence: float
     source_document: str
 
@@ -88,8 +107,8 @@ class GraphResponse(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    query: str
-    document_id: Optional[str] = None
+    query: str = Field(min_length=1, max_length=2000)
+    document_id: str | None = None
     top_k: int = Field(default=5, ge=1, le=20)
     hop_depth: int = Field(default=2, ge=1, le=3)
 
@@ -106,33 +125,39 @@ class QueryResponse(BaseModel):
     answer: str
     sources: list[SourceChunk]
     graph_context: GraphResponse
-    cypher_used: Optional[str] = None
+    cypher_used: str | None = None
 
 
 # --- Graph mutation models ---
 
+
 class CreateNodeRequest(BaseModel):
     name: str
     type: str = "CONCEPT"
-    description: Optional[str] = None
-    parent_entity_id: Optional[str] = None
-    relationship_type: Optional[str] = None
-    relationship_direction: str = "out"   # "out" = parent→new, "in" = new→parent
+    description: str | None = None
+    parent_entity_id: str | None = None
+    relationship_type: str | None = None
+    relationship_direction: str = "out"  # "out" = parent→new, "in" = new→parent
     confidence: float = Field(ge=0.0, le=1.0, default=1.0)
 
 
 class UpdateNodeRequest(BaseModel):
-    name: Optional[str] = None
-    type: Optional[str] = None
-    description: Optional[str] = None
+    name: str | None = None
+    type: str | None = None
+    description: str | None = None
 
 
 class CreateEdgeRequest(BaseModel):
     source_entity_id: str
     target_entity_id: str
     type: str
-    description: Optional[str] = None
+    description: str | None = None
     confidence: float = Field(ge=0.0, le=1.0, default=1.0)
+
+
+class CypherRequest(BaseModel):
+    cypher: str = Field(min_length=1, max_length=5000)
+    params: dict = Field(default_factory=dict)
 
 
 class OrphanInfo(BaseModel):
@@ -140,4 +165,4 @@ class OrphanInfo(BaseModel):
 
 
 class EdgeOrphanInfo(BaseModel):
-    orphaned_target: Optional[GraphNode] = None
+    orphaned_target: GraphNode | None = None

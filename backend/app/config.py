@@ -1,27 +1,68 @@
-from pydantic_settings import BaseSettings
-from pathlib import Path
+"""Application settings, loaded from environment variables (and `.env` in development)."""
+
+from functools import lru_cache
+from typing import Annotated
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    anthropic_api_key: str
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # ── Secrets / connections (no insecure defaults) ──────────────────────────
+    anthropic_api_key: str = ""
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
-    neo4j_password: str = "password"
-    embedding_model: str = "all-MiniLM-L6-v2"
-    faiss_index_path: str = "data/faiss.index"
-    faiss_metadata_path: str = "data/faiss_metadata.json"
+    neo4j_password: str = ""
+    neo4j_database: str | None = None
+
+    # ── LLM ───────────────────────────────────────────────────────────────────
+    llm_model: str = "claude-opus-5-5"
+    extraction_effort: str = "low"
+    answer_effort: str = "medium"
+    extraction_concurrency: int = Field(default=8, ge=1, le=64)
+    llm_fallbacks: bool = True
+
+    # ── Embeddings ────────────────────────────────────────────────────────────
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_dim: int = 384
+    embedding_cache_dir: str | None = None
+
+    # ── Chunking / resolution ─────────────────────────────────────────────────
     chunk_min_tokens: int = 300
     chunk_max_tokens: int = 800
     chunk_overlap_tokens: int = 100
     entity_similarity_threshold: float = 0.88
-    llm_model: str = "claude-sonnet-4-6"
+
+    # ── Limits / abuse protection ─────────────────────────────────────────────
+    max_upload_mb: int = 25
+    max_pages: int = 150
+    uploads_per_hour: int = 10
+    queries_per_hour: int = 120
+    cypher_timeout_s: float = 5.0
+    cypher_max_rows: int = 500
+
+    # ── HTTP ──────────────────────────────────────────────────────────────────
+    cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:5173"]
     upload_dir: str = "data/uploads"
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+    trust_proxy_headers: bool = False
 
-    model_config = {"env_file": ".env"}
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [o.strip() for o in v.split(",") if o.strip()]
+        return v
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.max_upload_mb * 1024 * 1024
 
 
-settings = Settings()
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()
 
-Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
-Path("data").mkdir(exist_ok=True)
+
+settings = get_settings()

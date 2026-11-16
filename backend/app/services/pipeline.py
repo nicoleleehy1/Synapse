@@ -1,97 +1,164 @@
-"""End-to-end PDF → Knowledge Graph pipeline."""
+"""End-to-end PDF → knowledge graph pipeline (asyncio).
 
+    parse ─► chunk ─► embed chunks ─► write chunks
+                                   └► extract (N chunks concurrently, bounded) ─► resolve ─► write graph
+
+CPU-bound steps (PDF parsing, tokenising, embedding) run in worker threads;
+LLM extraction runs as concurrent coroutines bounded by a semaphore. Every
+stage transition is persisted to the (:Document) node and broadcast to live
+subscribers, and a failure in one chunk's extraction degrades gracefully
+instead of failing the whole document.
+"""
+
+from __future__ import annotations
+
+import asyncio
 import logging
-import uuid
 from pathlib import Path
 
-from app.models import DocumentStatus
+from app.config import settings
+from app.models import DocumentStatus, ExtractionResult, TextChunk
+from app.models.schema import _now
 from app.services.chunker import Chunker
+from app.services.embeddings import Embedder, embed_async, get_embedder
+from app.services.events import ProgressBroker
+from app.services.events import broker as default_broker
 from app.services.extractor import Extractor
 from app.services.graph_store import GraphStore
 from app.services.pdf_processor import PDFProcessor
 from app.services.resolver import EntityResolver
-from app.services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
+
+# Fractions of the progress bar allotted to each stage.
+_P_PARSED, _P_EMBEDDED, _P_EXTRACTED, _P_RESOLVED = 0.05, 0.15, 0.85, 0.92
+
+
+class DocumentTooLarge(ValueError):
+    pass
 
 
 class Pipeline:
     def __init__(
         self,
         graph_store: GraphStore,
-        vector_store: VectorStore,
+        extractor: Extractor | None = None,
+        embedder: Embedder | None = None,
+        broker: ProgressBroker | None = None,
+        pdf: PDFProcessor | None = None,
+        chunker: Chunker | None = None,
     ) -> None:
-        self._pdf = PDFProcessor()
-        self._chunker = Chunker()
-        self._extractor = Extractor()
         self._gs = graph_store
-        self._vs = vector_store
-
-    def process(self, pdf_path: str | Path, document_id: str, filename: str) -> DocumentStatus:
-        status = DocumentStatus(
-            document_id=document_id,
-            filename=filename,
-            status="processing",
+        self._extractor = extractor or Extractor()
+        self._embedder = embedder
+        self._broker = broker or default_broker
+        self._pdf = pdf or PDFProcessor()
+        self._chunker = chunker or Chunker(
+            min_tokens=settings.chunk_min_tokens,
+            max_tokens=settings.chunk_max_tokens,
+            overlap_tokens=settings.chunk_overlap_tokens,
         )
 
+    @property
+    def embedder(self) -> Embedder:
+        if self._embedder is None:
+            self._embedder = get_embedder()
+        return self._embedder
+
+    async def _emit(self, doc: DocumentStatus, /, **changes) -> None:
+        for k, v in changes.items():
+            setattr(doc, k, v)
+        doc.updated_at = _now()
+        await self._gs.save_document(doc)
+        self._broker.publish(doc.model_copy())
+
+    async def process(self, pdf_path: str | Path, status: DocumentStatus) -> DocumentStatus:
         try:
-            # 1. Extract text
-            logger.info("Extracting text from %s", filename)
-            pages = self._pdf.extract(pdf_path)
-            status.page_count = len(pages)
-
-            # 2. Chunk
-            logger.info("Chunking %d pages", len(pages))
-            chunks = self._chunker.chunk_pages(pages, document_id, filename)
-            status.chunk_count = len(chunks)
-
-            # 3. Store chunks in Neo4j + FAISS
-            logger.info("Indexing %d chunks", len(chunks))
-            self._vs.add_chunks(chunks)
-            for chunk in chunks:
-                self._gs.upsert_chunk_node(
-                    chunk_id=chunk.id,
-                    text=chunk.text,
-                    page=chunk.page_number,
-                    document_id=document_id,
-                    document_name=filename,
+            await self._emit(status, status="processing", stage="parsing", progress=0.01)
+            pages = await asyncio.to_thread(self._pdf.extract, pdf_path)
+            if len(pages) > settings.max_pages:
+                raise DocumentTooLarge(
+                    f"Document has {len(pages)} text pages; the limit is {settings.max_pages}."
                 )
+            if not pages:
+                raise ValueError("No extractable text found (is this a scanned PDF?).")
 
-            # 4. Extract entities & relationships (per-chunk), then resolve
-            resolver = EntityResolver()
-            all_entities = []
-            all_relationships = []
-
-            for chunk in chunks:
-                logger.debug("Extracting from chunk %s (page %d)", chunk.id, chunk.page_number)
-                result = self._extractor.extract_from_chunk(chunk, filename)
-                ents, rels = resolver.resolve(result.entities, result.relationships)
-                all_relationships.extend(rels)
-
-            all_entities = resolver.all_entities
-            status.entity_count = len(all_entities)
-            status.relationship_count = len(all_relationships)
-
-            # 5. Persist graph
-            logger.info(
-                "Writing %d entities, %d relationships to Neo4j",
-                len(all_entities),
-                len(all_relationships),
+            await self._emit(status, stage="chunking", page_count=len(pages), progress=_P_PARSED)
+            chunks = await asyncio.to_thread(
+                self._chunker.chunk_pages, pages, status.document_id, status.filename
             )
-            for entity in all_entities:
-                self._gs.upsert_entity(entity)
-                for cid in entity.source_chunk_ids:
-                    self._gs.link_entity_to_chunk(entity.id, cid)
 
-            for rel in all_relationships:
-                self._gs.upsert_relationship(rel)
+            await self._emit(status, stage="embedding", chunk_count=len(chunks))
+            vecs = await embed_async([c.text for c in chunks], self.embedder)
+            await self._gs.write_chunks(chunks, vecs)
 
-            status.status = "complete"
-            logger.info("Pipeline complete for %s", filename)
+            await self._emit(status, stage="extracting", progress=_P_EMBEDDED)
+            results = await self._extract_all(chunks, status)
 
-        except Exception as exc:
-            logger.exception("Pipeline failed for %s: %s", filename, exc)
-            status.status = "error"
-            status.error = str(exc)
+            await self._emit(status, stage="resolving", progress=_P_EXTRACTED)
+            resolver = EntityResolver(embedder=self.embedder)
 
+            def _resolve():
+                rels = []
+                for res in results:
+                    rels.extend(resolver.resolve(res.entities, res.relationships))
+                ents = resolver.all_entities
+                return ents, [resolver.embedding_for(e) for e in ents], rels
+
+            entities, ent_vecs, relationships = await asyncio.to_thread(_resolve)
+
+            await self._emit(
+                status,
+                stage="writing",
+                progress=_P_RESOLVED,
+                entity_count=len(entities),
+                relationship_count=len(relationships),
+            )
+            await self._gs.write_graph(entities, ent_vecs, relationships)
+
+            await self._emit(status, status="complete", stage="done", progress=1.0)
+            logger.info(
+                "Processed %s: %d chunks, %d entities, %d relationships",
+                status.filename,
+                len(chunks),
+                len(entities),
+                len(relationships),
+            )
+        except Exception as exc:  # noqa: BLE001 - surface any failure to the user
+            logger.exception("Pipeline failed for %s", status.filename)
+            try:
+                await self._emit(status, status="error", error=str(exc) or exc.__class__.__name__)
+            except Exception:  # noqa: BLE001 - DB unreachable; the restart sweep will fail the job
+                logger.exception("Could not record failure for %s", status.document_id)
         return status
+
+    async def _extract_all(self, chunks: list[TextChunk], status: DocumentStatus) -> list[ExtractionResult]:
+        sem = asyncio.Semaphore(settings.extraction_concurrency)
+        done = 0
+        failures = 0
+        lock = asyncio.Lock()
+
+        async def one(chunk: TextChunk) -> ExtractionResult:
+            nonlocal done, failures
+            async with sem:
+                try:
+                    res = await self._extractor.extract_from_chunk(chunk)
+                except Exception:  # noqa: BLE001 - one bad chunk must not sink the document
+                    logger.exception("Extraction failed for chunk %s", chunk.id)
+                    res = ExtractionResult(entities=[], relationships=[])
+                    failures += 1
+            async with lock:
+                done += 1
+                frac = done / max(len(chunks), 1)
+                await self._emit(
+                    status,
+                    chunks_processed=done,
+                    progress=_P_EMBEDDED + frac * (_P_EXTRACTED - _P_EMBEDDED),
+                )
+            return res
+
+        # gather preserves input order, which keeps resolution deterministic.
+        results = await asyncio.gather(*(one(c) for c in chunks))
+        if chunks and failures == len(chunks):
+            raise RuntimeError("Entity extraction failed for every chunk (check ANTHROPIC_API_KEY).")
+        return results

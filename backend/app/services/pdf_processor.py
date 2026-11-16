@@ -1,10 +1,9 @@
 """PDF text extraction using PyMuPDF."""
 
 import re
-import uuid
 from pathlib import Path
 
-import fitz  # PyMuPDF
+import pymupdf
 
 
 class PDFProcessor:
@@ -28,15 +27,17 @@ class PDFProcessor:
         pdf_path = Path(pdf_path)
         pages: list[dict] = []
 
-        with fitz.open(str(pdf_path)) as doc:
+        with pymupdf.open(str(pdf_path)) as doc:
             for page_index, page in enumerate(doc):
                 raw = page.get_text("text")  # plain text with line breaks
                 cleaned = self._clean(raw)
                 if cleaned.strip():
-                    pages.append({
-                        "page_number": page_index + 1,
-                        "text": cleaned,
-                    })
+                    pages.append(
+                        {
+                            "page_number": page_index + 1,
+                            "text": cleaned,
+                        }
+                    )
 
         return pages
 
@@ -47,10 +48,17 @@ class PDFProcessor:
     def _clean(self, text: str) -> str:
         # Normalise ligatures (fi, fl, ff, etc.)
         ligatures = {
-            "\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl",
-            "\ufb03": "ffi", "\ufb04": "ffl", "\u2019": "'",
-            "\u2018": "'", "\u201c": '"', "\u201d": '"',
-            "\u2013": "-", "\u2014": "--",
+            "\ufb00": "ff",
+            "\ufb01": "fi",
+            "\ufb02": "fl",
+            "\ufb03": "ffi",
+            "\ufb04": "ffl",
+            "\u2019": "'",
+            "\u2018": "'",
+            "\u201c": '"',
+            "\u201d": '"',
+            "\u2013": "-",
+            "\u2014": "--",
         }
         for lig, replacement in ligatures.items():
             text = text.replace(lig, replacement)

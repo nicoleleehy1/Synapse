@@ -1,123 +1,118 @@
-"""Entity resolution — deduplicate similar entities using embeddings + string similarity."""
+"""Entity resolution: merge near-duplicate entities discovered across chunks.
+
+1. Exact match on (normalised name, type) short-circuits the embedding step.
+2. Otherwise embed "name (type)" and compare against all canonicals of the same
+   type in one matrix multiply (embeddings are L2-normalised, so dot = cosine).
+3. If the best similarity >= threshold, merge (aliases + chunk provenance);
+   otherwise the entity becomes a new canonical.
+4. Relationship endpoints are rewritten to canonical ids and de-duplicated.
+
+Embeddings for a whole batch are computed in a single call, so resolving N
+entities costs one model invocation per chunk rather than N.
+"""
+
+from __future__ import annotations
 
 import logging
-from typing import Optional
+import re
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from app.config import settings
 from app.models import Entity, Relationship
+from app.services.embeddings import Embedder, get_embedder
 
 logger = logging.getLogger(__name__)
 
+_WS = re.compile(r"\s+")
 
-def _cosine(a: np.ndarray, b: np.ndarray) -> float:
-    denom = np.linalg.norm(a) * np.linalg.norm(b)
-    return float(np.dot(a, b) / denom) if denom > 0 else 0.0
+
+def _norm(name: str) -> str:
+    return _WS.sub(" ", name.strip().lower())
 
 
 class EntityResolver:
-    """
-    Merges near-duplicate entities discovered across chunks.
-
-    Approach:
-    1. Embed each entity's "name — type" string.
-    2. For each new entity, find the most similar existing canonical entity.
-    3. If similarity >= threshold (and types match), merge into the canonical.
-    4. Update relationship pointers to use canonical IDs.
-    """
-
-    def __init__(self) -> None:
-        self._model = SentenceTransformer(settings.embedding_model)
-        self._threshold = settings.entity_similarity_threshold
+    def __init__(self, embedder: Embedder | None = None, threshold: float | None = None) -> None:
+        self._embedder = embedder or get_embedder()
+        self._threshold = settings.entity_similarity_threshold if threshold is None else threshold
         self._canonicals: list[Entity] = []
-        self._canonical_embeddings: list[np.ndarray] = []
-        # old_id -> canonical entity
+        self._by_key: dict[tuple[str, str], Entity] = {}
+        # Per-type embedding matrices, row i ↔ self._type_members[type][i]
+        self._type_vecs: dict[str, np.ndarray] = {}
+        self._type_members: dict[str, list[Entity]] = {}
         self._id_map: dict[str, Entity] = {}
+        self._seen_rels: set[tuple[str, str, str]] = set()
 
     # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
-    def resolve(
-        self,
-        entities: list[Entity],
-        relationships: list[Relationship],
-    ) -> tuple[list[Entity], list[Relationship]]:
-        """
-        Resolve a batch of entities against the running canonical set.
-        Returns deduplicated entities and patched relationships.
-        """
-        for entity in entities:
-            canonical = self._find_or_create_canonical(entity)
-            self._id_map[entity.id] = canonical
+    def resolve(self, entities: list[Entity], relationships: list[Relationship]) -> list[Relationship]:
+        """Fold a batch into the canonical set and return its de-duplicated relationships."""
+        pending: list[Entity] = []
+        for e in entities:
+            hit = self._by_key.get((_norm(e.name), e.type))
+            if hit:
+                self._merge(hit, e)
+            else:
+                pending.append(e)
 
-        # Patch relationship IDs
-        resolved_rels: list[Relationship] = []
-        seen_rels: set[tuple[str, str, str]] = set()
+        if pending:
+            vecs = self._embedder.embed([f"{e.name} ({e.type})" for e in pending])
+            for e, v in zip(pending, vecs, strict=True):
+                # Re-check exact key: an earlier entity in this same batch may have created it
+                hit = self._by_key.get((_norm(e.name), e.type)) or self._nearest(e.type, v)
+                if hit:
+                    self._merge(hit, e)
+                else:
+                    self._add(e, v)
 
+        out: list[Relationship] = []
         for rel in relationships:
             src = self._id_map.get(rel.source_entity_id)
             tgt = self._id_map.get(rel.target_entity_id)
             if not src or not tgt or src.id == tgt.id:
                 continue
             key = (src.id, tgt.id, rel.type)
-            if key in seen_rels:
+            if key in self._seen_rels:
                 continue
-            seen_rels.add(key)
-            resolved_rels.append(
-                rel.model_copy(update={"source_entity_id": src.id, "target_entity_id": tgt.id})
-            )
-
-        return self._canonicals, resolved_rels
-
-    def get_canonical(self, entity_id: str) -> Optional[Entity]:
-        return self._id_map.get(entity_id)
+            self._seen_rels.add(key)
+            out.append(rel.model_copy(update={"source_entity_id": src.id, "target_entity_id": tgt.id}))
+        return out
 
     @property
     def all_entities(self) -> list[Entity]:
         return list(self._canonicals)
 
+    def embedding_for(self, entity: Entity) -> np.ndarray | None:
+        members = self._type_members.get(entity.type, [])
+        for i, m in enumerate(members):
+            if m.id == entity.id:
+                return self._type_vecs[entity.type][i]
+        return None
+
     # ------------------------------------------------------------------
 
-    def _embed(self, entity: Entity) -> np.ndarray:
-        text = f"{entity.name} ({entity.type})"
-        return self._model.encode(text, normalize_embeddings=True)
+    def _nearest(self, type_: str, vec: np.ndarray) -> Entity | None:
+        mat = self._type_vecs.get(type_)
+        if mat is None or len(mat) == 0:
+            return None
+        sims = mat @ vec
+        idx = int(np.argmax(sims))
+        return self._type_members[type_][idx] if sims[idx] >= self._threshold else None
 
-    def _find_or_create_canonical(self, entity: Entity) -> Entity:
-        if not self._canonicals:
-            return self._add_canonical(entity)
+    def _merge(self, canonical: Entity, dup: Entity) -> None:
+        self._id_map[dup.id] = canonical
+        if dup.name != canonical.name and dup.name not in canonical.aliases:
+            canonical.aliases.append(dup.name)
+        for cid in dup.source_chunk_ids:
+            if cid not in canonical.source_chunk_ids:
+                canonical.source_chunk_ids.append(cid)
+        if not canonical.description and dup.description:
+            canonical.description = dup.description
 
-        emb = self._embed(entity)
-        best_sim = -1.0
-        best_idx = -1
-
-        for idx, (canon, canon_emb) in enumerate(
-            zip(self._canonicals, self._canonical_embeddings)
-        ):
-            # Only consider same entity type
-            if canon.type != entity.type:
-                continue
-            sim = _cosine(emb, canon_emb)
-            if sim > best_sim:
-                best_sim = sim
-                best_idx = idx
-
-        if best_sim >= self._threshold and best_idx >= 0:
-            canonical = self._canonicals[best_idx]
-            # Merge: add aliases and chunk references
-            if entity.name not in canonical.aliases and entity.name != canonical.name:
-                canonical.aliases.append(entity.name)
-            for cid in entity.source_chunk_ids:
-                if cid not in canonical.source_chunk_ids:
-                    canonical.source_chunk_ids.append(cid)
-            return canonical
-
-        return self._add_canonical(entity)
-
-    def _add_canonical(self, entity: Entity) -> Entity:
+    def _add(self, entity: Entity, vec: np.ndarray) -> None:
         self._canonicals.append(entity)
-        self._canonical_embeddings.append(self._embed(entity))
+        self._by_key[(_norm(entity.name), entity.type)] = entity
         self._id_map[entity.id] = entity
-        return entity
+        mat = self._type_vecs.get(entity.type)
+        self._type_vecs[entity.type] = vec[None, :] if mat is None else np.vstack([mat, vec])
+        self._type_members.setdefault(entity.type, []).append(entity)
