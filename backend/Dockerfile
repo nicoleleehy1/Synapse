@@ -14,7 +14,7 @@ RUN pip install -r requirements.txt
 # Bake the ONNX embedding model into the image so cold starts never hit the network.
 RUN python -c "from fastembed import TextEmbedding; TextEmbedding('sentence-transformers/all-MiniLM-L6-v2', cache_dir='/opt/models')"
 
-RUN useradd --create-home --uid 10001 synapse && mkdir -p /app/data/uploads && chown -R synapse /app/data
+RUN useradd --create-home --uid 10001 synapse && mkdir -p /app/data/uploads /app/data/pdfs && chown -R synapse /app/data
 COPY --chown=synapse app ./app
 USER synapse
 

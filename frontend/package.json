@@ -14,6 +14,7 @@
     "axios": "^1.21.1",
     "d3-force": "^3.0.1",
     "lucide-react": "^1.73.0",
+    "pdfjs-dist": "^5.4.296",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-force-graph-2d": "^1.29.2"

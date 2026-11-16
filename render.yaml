@@ -19,6 +19,10 @@ services:
         sync: false
       - key: TRUST_PROXY_HEADERS
         value: "true"
+      # Free instances have no persistent disk, so kept PDFs vanish on redeploy and the
+      # source viewer falls back to passage text. Attach a disk at /app/data to keep them.
+      - key: RETAIN_PDFS
+        value: "true"
       - key: EXTRACTION_CONCURRENCY
         value: "6"
       - key: CORS_ORIGINS

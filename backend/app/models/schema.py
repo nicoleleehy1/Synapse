@@ -18,6 +18,8 @@ class TextChunk(BaseModel):
     char_start: int
     char_end: int
     token_count: int
+    # Rectangles on the PDF page, as fractions of page size: {page, x0, y0, x1, y1}.
+    highlights: list[dict[str, float]] = Field(default_factory=list)
 
 
 class Entity(BaseModel):
@@ -187,3 +189,70 @@ class OrphanInfo(BaseModel):
 
 class EdgeOrphanInfo(BaseModel):
     orphaned_target: GraphNode | None = None
+
+
+# --- Source viewer and study ---
+
+
+class Highlight(BaseModel):
+    page: int
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+class ChunkDetail(BaseModel):
+    chunk_id: str
+    text: str
+    page_number: int
+    document_id: str
+    document_name: str
+    highlights: list[Highlight]
+    has_pdf: bool
+
+
+class Card(BaseModel):
+    id: str
+    front: str
+    back: str
+    chunk_id: str | None
+    document_id: str | None
+    entity_ids: list[str]
+    entity_names: list[str]
+    state: Literal["new", "review", "relearning"]
+    reps: int
+    lapses: int
+    due_ms: int
+    # What each rating (1 Again, 2 Hard, 3 Good, 4 Easy) would schedule, in seconds from now.
+    intervals: dict[int, int]
+
+
+class GenerateCardsRequest(BaseModel):
+    document_id: str | None = None
+    count: int = Field(default=12, ge=1, le=40)
+
+
+class GenerateCardsResponse(BaseModel):
+    created: int
+
+
+class ReviewRequest(BaseModel):
+    rating: Literal[1, 2, 3, 4]
+
+
+class EntityMastery(BaseModel):
+    entity_id: str
+    mastery: float  # mean recall probability of the entity's cards, 0-1
+    cards: int
+    due: int
+
+
+class StudyStats(BaseModel):
+    total: int
+    new: int
+    due: int
+    reviewed_today: int
+    retention_30d: float | None
+    streak_days: int
+    activity: list[int]  # reviews per day for the last 14 days, oldest first
