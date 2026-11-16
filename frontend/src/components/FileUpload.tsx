@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react'
 import { Loader2 } from 'lucide-react'
 import type { DocumentStatus } from '../types/graph'
+import { progressPercent, stageLabel } from '../lib/progress'
 
 interface Props {
   onUpload: (file: File) => void
@@ -30,7 +31,7 @@ export function FileUpload({ onUpload, uploading, status, error }: Props) {
     [onUpload],
   )
 
-  const isProcessing = uploading || status?.status === 'processing'
+  const isProcessing = uploading || status?.status === 'processing' || status?.status === 'queued'
 
   return (
     <div className="space-y-3">
@@ -64,7 +65,7 @@ export function FileUpload({ onUpload, uploading, status, error }: Props) {
 
       {/* Error */}
       {error && (
-        <p className="text-xs text-foreground border border-border rounded px-3 py-2 bg-secondary">
+        <p className="text-xs text-foreground border border-border rounded-sm px-3 py-2 bg-secondary">
           {error}
         </p>
       )}
@@ -82,15 +83,30 @@ export function FileUpload({ onUpload, uploading, status, error }: Props) {
             <StatusPill status={status.status} />
           </div>
 
-          {status.status === 'processing' && (
-            <div className="flex items-center gap-2 text-xs text-chart-2">
-              <Loader2 size={11} className="animate-spin" />
-              Extracting entities and relationships…
+          {(status.status === 'processing' || status.status === 'queued') && (
+            <div className="space-y-1.5" role="status" aria-live="polite">
+              <div className="flex items-center gap-2 text-xs text-chart-2">
+                <Loader2 size={11} className="animate-spin shrink-0" />
+                <span className="truncate">{stageLabel(status)}</span>
+                <span className="ml-auto tabular-nums">{progressPercent(status.progress)}%</span>
+              </div>
+              <div
+                className="h-1 w-full rounded-sm bg-secondary overflow-hidden"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progressPercent(status.progress)}
+              >
+                <div
+                  className="h-full bg-foreground transition-[width] duration-300 ease-out"
+                  style={{ width: `${progressPercent(status.progress)}%` }}
+                />
+              </div>
             </div>
           )}
 
           {status.status === 'complete' && (
-            <div className="grid grid-cols-2 gap-px bg-border border border-border rounded overflow-hidden">
+            <div className="grid grid-cols-2 gap-px bg-border border border-border rounded-sm overflow-hidden">
               <Stat label="Pages"         value={status.page_count} />
               <Stat label="Chunks"        value={status.chunk_count} />
               <Stat label="Entities"      value={status.entity_count} />
@@ -109,13 +125,14 @@ export function FileUpload({ onUpload, uploading, status, error }: Props) {
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, string> = {
+    queued:     'Queued',
     processing: 'Processing',
     complete:   'Complete',
     error:      'Error',
     uploading:  'Uploading',
   }
   return (
-    <span className="text-2xs font-medium border border-border rounded px-2 py-0.5 text-chart-3 bg-secondary shrink-0">
+    <span className="text-2xs font-medium border border-border rounded-sm px-2 py-0.5 text-chart-3 bg-secondary shrink-0">
       {map[status] ?? status}
     </span>
   )

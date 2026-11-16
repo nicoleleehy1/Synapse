@@ -22,10 +22,19 @@ export interface GraphData {
   edges: GraphEdge[]
 }
 
+export type DocumentState = 'queued' | 'processing' | 'complete' | 'error'
+export type PipelineStage =
+  | 'queued' | 'parsing' | 'chunking' | 'embedding' | 'extracting' | 'resolving' | 'writing' | 'done'
+
 export interface DocumentStatus {
   document_id: string
   filename: string
-  status: 'uploading' | 'processing' | 'complete' | 'error'
+  status: DocumentState
+  stage: PipelineStage
+  progress: number
+  chunks_processed: number
+  created_at?: string
+  updated_at?: string
   page_count: number
   chunk_count: number
   entity_count: number

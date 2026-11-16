@@ -1,36 +1,21 @@
-"""FastAPI dependency injection — singletons shared across requests."""
+"""Process-wide singletons, created in the app lifespan and injected via FastAPI."""
 
-from functools import lru_cache
+from __future__ import annotations
+
+from fastapi import Request
 
 from app.services.graph_store import GraphStore
-from app.services.vector_store import VectorStore
 from app.services.pipeline import Pipeline
 from app.services.retriever import Retriever
 
 
-@lru_cache(maxsize=1)
-def _graph_store() -> GraphStore:
-    gs = GraphStore()
-    gs.connect()
-    return gs
+def get_graph_store(request: Request) -> GraphStore:
+    return request.app.state.graph_store
 
 
-@lru_cache(maxsize=1)
-def _vector_store() -> VectorStore:
-    return VectorStore()
+def get_pipeline(request: Request) -> Pipeline:
+    return request.app.state.pipeline
 
 
-def get_graph_store() -> GraphStore:
-    return _graph_store()
-
-
-def get_vector_store() -> VectorStore:
-    return _vector_store()
-
-
-def get_pipeline() -> Pipeline:
-    return Pipeline(graph_store=_graph_store(), vector_store=_vector_store())
-
-
-def get_retriever() -> Retriever:
-    return Retriever(vector_store=_vector_store(), graph_store=_graph_store())
+def get_retriever(request: Request) -> Retriever:
+    return request.app.state.retriever

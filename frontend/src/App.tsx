@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { X } from 'lucide-react'
+import { X, Network, Table2 } from 'lucide-react'
 import { FileUpload } from './components/FileUpload'
 import { GraphCanvas } from './components/GraphCanvas'
 import { NodeInspector } from './components/NodeInspector'
 import { QueryPanel } from './components/QueryPanel'
 import { Legend } from './components/Legend'
+import { TableView } from './components/TableView'
 import { AddNodeModal, AddEdgeModal } from './components/AddNodeModal'
 import { DeleteNodeModal, DeleteEdgeModal } from './components/DeleteConfirmModal'
 import { useDocumentUpload } from './hooks/useDocumentUpload'
@@ -15,6 +16,7 @@ import {
   createNode, createEdge, updateNode as apiUpdateNode,
   deleteNode, deleteEdge,
   getNodeOrphans, getEdgeOrphanTarget, getEntityNeighbourhood,
+  listDocuments,
 } from './api/client'
 import type { DocumentStatus, FGNode, FGLink, GraphNode } from './types/graph'
 import { SAMPLE_GRAPH } from './data/sampleGraph'
@@ -44,6 +46,7 @@ export default function App() {
   const [selectedNode, setSelectedNode] = useState<FGNode | null>(null)
 
   // Modal state — kept for NodeInspector sidebar actions
+  const [view, setView] = useState<'graph' | 'table'>('graph')
   const [addNodeModal,  setAddNodeModal]  = useState<AddNodeState | null>(null)
   const [addEdgeModal,  setAddEdgeModal]  = useState<AddEdgeState | null>(null)
   const [delNodeModal,  setDelNodeModal]  = useState<DelNodeState | null>(null)
@@ -61,6 +64,11 @@ export default function App() {
     })
     if (canvasContainerRef.current) obs.observe(canvasContainerRef.current)
     return () => obs.disconnect()
+  }, [])
+
+  // Documents persist server-side: restore the list on load
+  useEffect(() => {
+    listDocuments().then(setDocuments).catch(() => { /* backend offline: sample graph still works */ })
   }, [])
 
   // Document lifecycle
@@ -163,6 +171,20 @@ export default function App() {
     // No backend update endpoint for edges yet; local-only
   }, [editor])
 
+  // ── Table: create node (no canvas coords — place at origin) ──────────────
+  const handleTableCreateNode = useCallback(async (name: string, type: string) => {
+    await handleCanvasCreateNode(name, type, 0, 0)
+  }, [handleCanvasCreateNode])
+
+  // ── Table: edit node (supports description via updates object) ────────────
+  const handleTableEditNode = useCallback(async (
+    nodeId: string,
+    updates: { name?: string; type?: string; description?: string },
+  ) => {
+    editor.updateNode(nodeId, updates)
+    try { await apiUpdateNode(nodeId, updates) } catch { /* ignore */ }
+  }, [editor])
+
   // ── NodeInspector: expand neighbourhood ───────────────────────────────────
   const handleExpandNode = useCallback(async (node: FGNode) => {
     try {
@@ -247,7 +269,7 @@ export default function App() {
       {/* ── Sidebar ── */}
       <aside className="w-[320px] shrink-0 flex flex-col border-r border-border overflow-y-auto">
         <div className="px-7 pt-8 pb-6 border-b border-border">
-          <h1 className="text-xl font-bold tracking-tight text-foreground">Knowledge Graph</h1>
+          <h1 className="text-xl font-bold tracking-tight text-foreground">Synapse</h1>
           <p className="text-xs text-chart-2 mt-1">PDF → entity graph · semantic search</p>
         </div>
 
@@ -263,7 +285,7 @@ export default function App() {
               <SectionLabel>Indexed documents</SectionLabel>
               <ul className="space-y-2">
                 {completedDocs.map(doc => (
-                  <li key={doc.document_id} className="border border-border rounded px-3 py-2.5 flex items-start gap-2">
+                  <li key={doc.document_id} className="border border-border rounded-sm px-3 py-2.5 flex items-start gap-2">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-foreground truncate" title={doc.filename}>
                         {doc.filename}
@@ -296,13 +318,13 @@ export default function App() {
                   <button
                     onClick={() => loadFullGraph()}
                     disabled={graphLoading}
-                    className="text-xs text-chart-3 border border-border rounded px-3 py-1.5 hover:border-chart-3 hover:text-foreground transition-colors disabled:opacity-40"
+                    className="text-xs text-chart-3 border border-border rounded-sm px-3 py-1.5 hover:border-chart-3 hover:text-foreground transition-colors disabled:opacity-40"
                   >
                     {graphLoading ? 'Loading…' : 'Reload'}
                   </button>
                   <button
                     onClick={() => { resetGraph(); setSelectedNode(null) }}
-                    className="text-xs text-chart-2 border border-border rounded px-3 py-1.5 hover:border-chart-3 hover:text-foreground transition-colors"
+                    className="text-xs text-chart-2 border border-border rounded-sm px-3 py-1.5 hover:border-chart-3 hover:text-foreground transition-colors"
                   >
                     Clear
                   </button>
@@ -319,8 +341,8 @@ export default function App() {
         </div>
       </aside>
 
-      {/* ── Canvas ── */}
-      <div ref={canvasContainerRef} className="flex-1 relative bg-background">
+      {/* ── Canvas / Table ── */}
+      <div ref={canvasContainerRef} className="flex-1 relative bg-background overflow-hidden">
         {editor.graph.nodes.length === 0 ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center select-none gap-4">
             <div className="text-center pointer-events-none">
@@ -329,34 +351,69 @@ export default function App() {
             </div>
             <button
               onClick={() => loadSample(SAMPLE_GRAPH)}
-              className="pointer-events-auto text-xs text-chart-3 border border-border rounded px-4 py-2 hover:border-chart-3 hover:text-foreground transition-colors"
+              className="pointer-events-auto text-xs text-chart-3 border border-border rounded-sm px-4 py-2 hover:border-chart-3 hover:text-foreground transition-colors"
             >
               Load sample graph
             </button>
           </div>
         ) : (
-          <GraphCanvas
-            data={editor.graph}
-            selectedNodeId={selectedNode?.id ?? null}
-            drillStack={editor.drillStack}
-            onNodeClick={(node) => setSelectedNode(node.id === selectedNode?.id ? null : node)}
-            onNodeDoubleClick={(node) => {
-              const drilled = editor.drillDown(node)
-              if (drilled) setSelectedNode(null)
-            }}
-            onDrillUp={() => { editor.drillUp(); setSelectedNode(null) }}
-            onCreateNode={handleCanvasCreateNode}
-            onEditNode={handleCanvasEditNode}
-            onDeleteNode={handleCanvasDeleteNode}
-            onCreateEdge={handleCanvasCreateEdge}
-            onDeleteEdge={handleCanvasDeleteEdge}
-            onUpdateEdge={handleCanvasUpdateEdge}
-            width={canvasSize.width}
-            height={canvasSize.height}
-          />
+          <>
+            {/* View switcher */}
+            <div className="absolute top-4 right-4 z-20 flex gap-0.5 bg-background border border-border rounded-sm p-0.5 shadow-xs">
+              <button
+                onClick={() => setView('graph')}
+                title="Graph view"
+                className={`p-1.5 rounded transition-colors ${
+                  view === 'graph' ? 'bg-secondary text-foreground' : 'text-chart-2 hover:text-foreground'
+                }`}
+              >
+                <Network size={14} />
+              </button>
+              <button
+                onClick={() => setView('table')}
+                title="Table view"
+                className={`p-1.5 rounded transition-colors ${
+                  view === 'table' ? 'bg-secondary text-foreground' : 'text-chart-2 hover:text-foreground'
+                }`}
+              >
+                <Table2 size={14} />
+              </button>
+            </div>
+
+            {view === 'graph' ? (
+              <GraphCanvas
+                data={editor.graph}
+                selectedNodeId={selectedNode?.id ?? null}
+                drillStack={editor.drillStack}
+                onNodeClick={(node) => setSelectedNode(node.id === selectedNode?.id ? null : node)}
+                onNodeDoubleClick={(node) => {
+                  const drilled = editor.drillDown(node)
+                  if (drilled) setSelectedNode(null)
+                }}
+                onDrillUp={() => { editor.drillUp(); setSelectedNode(null) }}
+                onCreateNode={handleCanvasCreateNode}
+                onEditNode={handleCanvasEditNode}
+                onDeleteNode={handleCanvasDeleteNode}
+                onCreateEdge={handleCanvasCreateEdge}
+                onDeleteEdge={handleCanvasDeleteEdge}
+                onUpdateEdge={handleCanvasUpdateEdge}
+                width={canvasSize.width}
+                height={canvasSize.height}
+              />
+            ) : (
+              <TableView
+                graph={editor.graph}
+                selectedNodeId={selectedNode?.id ?? null}
+                onNodeSelect={node => setSelectedNode(node)}
+                onEditNode={handleTableEditNode}
+                onDeleteNode={handleCanvasDeleteNode}
+                onCreateNode={handleTableCreateNode}
+              />
+            )}
+          </>
         )}
 
-        {editor.graph.nodes.length > 0 && <Legend />}
+        {editor.graph.nodes.length > 0 && view === 'graph' && <Legend />}
 
         {selectedNode && (
           <NodeInspector

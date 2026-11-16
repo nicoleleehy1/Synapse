@@ -12,7 +12,7 @@ const TYPES: { label: string; bg: string; text: string }[] = [
 
 export function Legend() {
   return (
-    <div className="absolute bottom-5 left-5 bg-background border border-border rounded p-3 z-10">
+    <div className="absolute bottom-5 left-5 bg-background border border-border rounded-sm p-3 z-10">
       <p className="text-2xs font-semibold text-chart-2 uppercase tracking-widest mb-2.5">
         Entity types
       </p>
@@ -20,7 +20,7 @@ export function Legend() {
         {TYPES.map((t) => (
           <div key={t.label} className="flex items-center gap-2">
             <div
-              className="w-2.5 h-1.5 rounded-sm shrink-0"
+              className="w-2.5 h-1.5 rounded-xs shrink-0"
               style={{ backgroundColor: t.bg }}
             />
             <span className="text-xs text-chart-3">{t.label}</span>

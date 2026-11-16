@@ -1,3 +1,27 @@
+# Secrets
 .env
-.venv
-/data/.env.example
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Runtime data (uploads, local indexes)
+backend/data/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

@@ -1,4 +1,6 @@
-"""Hybrid retrieval: vector search + graph traversal + LLM answer generation."""
+"""Hybrid retrieval: Neo4j vector search + graph expansion + grounded LLM answer."""
+
+from __future__ import annotations
 
 import logging
 
@@ -6,131 +8,108 @@ import anthropic
 
 from app.config import settings
 from app.models import GraphResponse, QueryRequest, QueryResponse, SourceChunk
+from app.services.embeddings import Embedder, embed_async, get_embedder
 from app.services.graph_store import GraphStore
-from app.services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
-_ANSWER_SYSTEM = """You are a knowledge graph question-answering assistant.
-You have access to:
-1. Retrieved text chunks (most relevant passages from the source documents).
-2. A subgraph of entities and relationships related to the query.
+ANSWER_SYSTEM = """You answer questions about a user's documents using a knowledge graph.
 
-Answer the user's question thoroughly and accurately, citing which sources informed your answer.
-If the answer is not supported by the provided context, say so clearly.
-Format your response in clear paragraphs. When referencing a source, mention the document name and page number."""
+You receive numbered source passages retrieved from the documents and a subgraph of
+related entities and relationships. Answer using only that context. Cite passages
+inline as [1], [2], etc., matching their numbers. If the context does not support an
+answer, say so plainly rather than guessing. Write in clear, concise paragraphs."""
 
 
 class Retriever:
-    def __init__(self, vector_store: VectorStore, graph_store: GraphStore) -> None:
-        self._vs = vector_store
+    def __init__(
+        self,
+        graph_store: GraphStore,
+        client: anthropic.AsyncAnthropic | None = None,
+        embedder: Embedder | None = None,
+    ) -> None:
         self._gs = graph_store
-        self._llm = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        self._llm = client or anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key or None)
+        self._embedder = embedder
 
-    def query(self, request: QueryRequest) -> QueryResponse:
-        # 1. Vector search
-        hits = self._vs.search(
-            query=request.query,
-            top_k=request.top_k,
-            document_id=request.document_id,
-        )
-
+    async def query(self, request: QueryRequest) -> QueryResponse:
+        # 1. Semantic search over chunk embeddings (Neo4j vector index)
+        qvec = (await embed_async([request.query], self._embedder or get_embedder()))[0]
+        hits = await self._gs.search_chunks(qvec, k=request.top_k, document_id=request.document_id)
         sources = [
             SourceChunk(
                 chunk_id=h["chunk_id"],
                 text=h["text"],
                 page_number=h["page_number"],
                 document_name=h["document_name"],
-                similarity_score=h["similarity_score"],
+                similarity_score=float(h["score"]),
             )
             for h in hits
         ]
 
-        # 2. Find entities mentioned in the retrieved chunks
-        chunk_ids = [h["chunk_id"] for h in hits]
-        entity_ids = self._gs.get_entities_for_chunks(chunk_ids)
-
-        # 3. Graph traversal: expand entity neighbourhoods
-        graph_nodes: dict[str, object] = {}
-        graph_edges: dict[str, object] = {}
-
-        for eid in entity_ids[:10]:  # cap to avoid explosion
-            subgraph = self._gs.get_entity_neighbourhood(eid, hop_depth=request.hop_depth)
-            for node in subgraph.nodes:
-                graph_nodes[node.id] = node
-            for edge in subgraph.edges:
-                graph_edges[edge.id] = edge
-
-        combined_graph = GraphResponse(
-            nodes=list(graph_nodes.values()),
-            edges=list(graph_edges.values()),
+        # 2. Entities mentioned in those chunks → 3. expand their neighbourhoods
+        entity_ids = await self._gs.get_entities_for_chunks([s.chunk_id for s in sources])
+        graph = (
+            await self._gs.get_neighbourhoods(entity_ids, request.hop_depth)
+            if entity_ids
+            else GraphResponse(nodes=[], edges=[])
         )
 
-        # 4. Build context for LLM
-        context = self._build_context(request.query, sources, combined_graph)
-
-        # 5. Generate answer
-        answer = self._generate_answer(request.query, context)
-
-        cypher = (
-            f"MATCH (e:Entity)-[:MENTIONED_IN]->(c:Chunk) WHERE c.id IN {chunk_ids!r} RETURN e LIMIT 20"
-            if chunk_ids else None
+        # 4. Grounded answer
+        answer = (
+            await self._answer(request.query, self.build_context(sources, graph))
+            if sources
+            else ("I couldn't find anything relevant in your documents yet. Try uploading a PDF first.")
         )
-
         return QueryResponse(
             answer=answer,
             sources=sources,
-            graph_context=combined_graph,
-            cypher_used=cypher,
+            graph_context=graph,
+            cypher_used=GraphStore.CHUNK_SEARCH_CYPHER,
         )
 
-    # ------------------------------------------------------------------
-
-    def _build_context(
-        self,
-        query: str,
-        sources: list[SourceChunk],
-        graph: GraphResponse,
-    ) -> str:
+    @staticmethod
+    def build_context(sources: list[SourceChunk], graph: GraphResponse) -> str:
         parts: list[str] = []
-
         if sources:
-            parts.append("=== RETRIEVED TEXT CHUNKS ===")
+            parts.append("<sources>")
             for i, s in enumerate(sources, 1):
                 parts.append(
-                    f"[{i}] (doc: {s.document_name}, page {s.page_number}, "
-                    f"similarity: {s.similarity_score:.3f})\n{s.text}"
+                    f'<source id="{i}" document="{s.document_name}" page="{s.page_number}">\n{s.text}\n</source>'
                 )
-
+            parts.append("</sources>")
         if graph.nodes:
-            parts.append("\n=== RELATED ENTITIES ===")
-            for node in graph.nodes[:30]:
-                desc = f" — {node.description}" if node.description else ""
-                parts.append(f"• {node.name} ({node.type}){desc}")
-
-        if graph.edges:
-            parts.append("\n=== RELATIONSHIPS ===")
-            node_map = {n.id: n.name for n in graph.nodes}
-            for edge in graph.edges[:50]:
-                src = node_map.get(edge.source, edge.source)
-                tgt = node_map.get(edge.target, edge.target)
-                desc = f" — {edge.description}" if edge.description else ""
-                parts.append(
-                    f"• {src} --[{edge.type} conf={edge.confidence:.2f}]--> {tgt}{desc}"
+            names = {n.id: n.name for n in graph.nodes}
+            parts.append("<entities>")
+            parts.extend(
+                f"- {n.name} ({n.type})" + (f": {n.description}" if n.description else "")
+                for n in graph.nodes[:40]
+            )
+            parts.append("</entities>")
+            if graph.edges:
+                parts.append("<relationships>")
+                parts.extend(
+                    f"- {names.get(e.source, e.source)} -[{e.type}]-> {names.get(e.target, e.target)}"
+                    + (f": {e.description}" if e.description else "")
+                    for e in graph.edges[:60]
                 )
-
+                parts.append("</relationships>")
         return "\n".join(parts)
 
-    def _generate_answer(self, query: str, context: str) -> str:
-        message = self._llm.messages.create(
+    async def _answer(self, query: str, context: str) -> str:
+        kwargs: dict = dict(
             model=settings.llm_model,
-            max_tokens=2048,
-            system=_ANSWER_SYSTEM,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Question: {query}\n\n{context}",
-                }
-            ],
+            max_tokens=16000,
+            system=ANSWER_SYSTEM,
+            messages=[{"role": "user", "content": f"{context}\n\n<question>{query}</question>"}],
+            output_config={"effort": settings.answer_effort},
         )
-        return message.content[0].text
+        if settings.llm_fallbacks:
+            msg = await self._llm.beta.messages.create(
+                betas=["server-side-fallback-2026-07-01"], fallbacks="default", **kwargs
+            )
+        else:
+            msg = await self._llm.messages.create(**kwargs)
+        if msg.stop_reason == "refusal":
+            return "I can't answer that question from these documents."
+        return "".join(b.text for b in msg.content if b.type == "text").strip()

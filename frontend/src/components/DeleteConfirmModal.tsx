@@ -16,7 +16,7 @@ export function DeleteNodeModal({ nodeName, orphans, onDeleteOnly, onDeleteCasca
 
   return (
     <Backdrop onClose={onClose}>
-      <div className="w-full max-w-sm bg-background border border-border rounded p-6 space-y-5">
+      <div className="w-full max-w-sm bg-background border border-border rounded-sm p-6 space-y-5">
         <div className="flex items-start justify-between">
           <h2 className="text-base font-semibold text-foreground">Delete entity</h2>
           <button onClick={onClose} className="text-chart-2 hover:text-foreground transition-colors">
@@ -30,7 +30,7 @@ export function DeleteNodeModal({ nodeName, orphans, onDeleteOnly, onDeleteCasca
         </p>
 
         {hasOrphans && (
-          <div className="border border-border rounded p-3 space-y-2">
+          <div className="border border-border rounded-sm p-3 space-y-2">
             <p className="text-2xs font-semibold text-chart-2 uppercase tracking-widest">
               {orphans.length} node{orphans.length > 1 ? 's' : ''} would become isolated
             </p>
@@ -52,7 +52,7 @@ export function DeleteNodeModal({ nodeName, orphans, onDeleteOnly, onDeleteCasca
           {hasOrphans && (
             <button
               onClick={onDeleteCascade}
-              className="w-full py-2 bg-foreground text-background text-sm font-medium rounded hover:bg-chart-4 transition-colors"
+              className="w-full py-2 bg-foreground text-background text-sm font-medium rounded-sm hover:bg-chart-4 transition-colors"
             >
               Delete {nodeName} + {orphans.length} isolated node{orphans.length > 1 ? 's' : ''}
             </button>
@@ -97,7 +97,7 @@ export function DeleteEdgeModal({
 }: DeleteEdgeProps) {
   return (
     <Backdrop onClose={onClose}>
-      <div className="w-full max-w-sm bg-background border border-border rounded p-6 space-y-5">
+      <div className="w-full max-w-sm bg-background border border-border rounded-sm p-6 space-y-5">
         <div className="flex items-start justify-between">
           <h2 className="text-base font-semibold text-foreground">Delete relationship</h2>
           <button onClick={onClose} className="text-chart-2 hover:text-foreground transition-colors">
@@ -105,7 +105,7 @@ export function DeleteEdgeModal({
           </button>
         </div>
 
-        <div className="border border-border rounded p-3 space-y-1 text-sm">
+        <div className="border border-border rounded-sm p-3 space-y-1 text-sm">
           <p className="text-foreground font-medium">{sourceName}</p>
           <p className="text-2xs font-mono text-chart-2">↓ {relType}</p>
           <p className="text-foreground font-medium">{targetName}</p>
@@ -122,7 +122,7 @@ export function DeleteEdgeModal({
           {orphanTarget && (
             <button
               onClick={onDeleteCascade}
-              className="w-full py-2 bg-foreground text-background text-sm font-medium rounded hover:bg-chart-4 transition-colors"
+              className="w-full py-2 bg-foreground text-background text-sm font-medium rounded-sm hover:bg-chart-4 transition-colors"
             >
               Delete relationship + {orphanTarget.name}
             </button>
@@ -154,7 +154,7 @@ export function DeleteEdgeModal({
 function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 backdrop-blur-sm px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 backdrop-blur-xs px-4"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
       {children}

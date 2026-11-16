@@ -37,7 +37,7 @@ export function AddNodeModal({ parentNode, onConfirm, onClose }: Props) {
 
   return (
     <Backdrop onClose={onClose}>
-      <div className="w-full max-w-md bg-background border border-border rounded p-6 space-y-5">
+      <div className="w-full max-w-md bg-background border border-border rounded-sm p-6 space-y-5">
         {/* Header */}
         <div className="flex items-start justify-between">
           <div>
@@ -108,7 +108,7 @@ export function AddNodeModal({ parentNode, onConfirm, onClose }: Props) {
           </Field>
         </div>
 
-        {error && <p className="text-xs text-foreground bg-secondary border border-border rounded px-3 py-2">{error}</p>}
+        {error && <p className="text-xs text-foreground bg-secondary border border-border rounded-sm px-3 py-2">{error}</p>}
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-1">
@@ -158,7 +158,7 @@ export function AddEdgeModal({ sourceNode, allNodes, onConfirm, onClose }: AddEd
 
   return (
     <Backdrop onClose={onClose}>
-      <div className="w-full max-w-md bg-background border border-border rounded p-6 space-y-5">
+      <div className="w-full max-w-md bg-background border border-border rounded-sm p-6 space-y-5">
         <div className="flex items-start justify-between">
           <div>
             <h2 className="text-base font-semibold text-foreground">Add relationship</h2>
@@ -173,7 +173,7 @@ export function AddEdgeModal({ sourceNode, allNodes, onConfirm, onClose }: AddEd
           {/* Target search */}
           <Field label="Target node *">
             {selectedTarget ? (
-              <div className="flex items-center justify-between border border-border rounded px-3 py-2">
+              <div className="flex items-center justify-between border border-border rounded-sm px-3 py-2">
                 <span className="text-sm text-foreground">{selectedTarget.name}</span>
                 <button onClick={() => { setTargetId(''); setTargetSearch('') }} className="text-chart-2 hover:text-foreground">
                   <X size={12} />
@@ -189,7 +189,7 @@ export function AddEdgeModal({ sourceNode, allNodes, onConfirm, onClose }: AddEd
                   onChange={e => setTargetSearch(e.target.value)}
                 />
                 {targetSearch && candidates.length > 0 && (
-                  <ul className="absolute z-10 top-full mt-1 w-full bg-background border border-border rounded overflow-hidden text-sm">
+                  <ul className="absolute z-10 top-full mt-1 w-full bg-background border border-border rounded-sm overflow-hidden text-sm">
                     {candidates.map(n => (
                       <li
                         key={n.id}
@@ -235,7 +235,7 @@ export function AddEdgeModal({ sourceNode, allNodes, onConfirm, onClose }: AddEd
           </Field>
         </div>
 
-        {error && <p className="text-xs text-foreground bg-secondary border border-border rounded px-3 py-2">{error}</p>}
+        {error && <p className="text-xs text-foreground bg-secondary border border-border rounded-sm px-3 py-2">{error}</p>}
 
         <div className="flex justify-end gap-2 pt-1">
           <button onClick={onClose} className={btnSecondary}>Cancel</button>
@@ -251,7 +251,7 @@ export function AddEdgeModal({ sourceNode, allNodes, onConfirm, onClose }: AddEd
 function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 backdrop-blur-sm px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/20 backdrop-blur-xs px-4"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
       {children}
@@ -268,6 +268,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-const input = 'w-full border border-border rounded px-3 py-2 text-sm text-foreground bg-background placeholder-chart-2 focus:outline-none focus:border-chart-3 transition-colors'
-const btnPrimary = 'px-4 py-2 bg-foreground text-background text-sm font-medium rounded hover:bg-chart-4 transition-colors'
-const btnSecondary = 'px-4 py-2 border border-border text-chart-3 text-sm rounded hover:border-chart-3 hover:text-foreground transition-colors'
+const input = 'w-full border border-border rounded-sm px-3 py-2 text-sm text-foreground bg-background placeholder-chart-2 focus:outline-hidden focus:border-chart-3 transition-colors'
+const btnPrimary = 'px-4 py-2 bg-foreground text-background text-sm font-medium rounded-sm hover:bg-chart-4 transition-colors'
+const btnSecondary = 'px-4 py-2 border border-border text-chart-3 text-sm rounded-sm hover:border-chart-3 hover:text-foreground transition-colors'
