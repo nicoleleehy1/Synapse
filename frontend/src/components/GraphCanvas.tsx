@@ -59,6 +59,8 @@ const DANGER_BTN = 'w-5 h-5 flex items-center justify-center bg-foreground text-
 
 const ENTITY_TYPES = ['PERSON', 'ORGANIZATION', 'TECHNOLOGY', 'CONCEPT', 'PRODUCT', 'LOCATION', 'EVENT', 'OTHER']
 
+
+// CLICK ON NODE + CLICK ON PENCIL TO EDIT NODE
 function NodeForm({ initial, onConfirm, onClose }: {
   initial?: { name: string; type: string }
   onConfirm: (name: string, type: string) => void
@@ -119,6 +121,8 @@ function NodeForm({ initial, onConfirm, onClose }: {
   )
 }
 
+
+// DOUBLE CLICK TO EDIT EDGE LABELS
 function EdgeLabelPopover({ initial = '', onConfirm, onClose }: {
   initial?: string
   onConfirm: (label: string) => void
