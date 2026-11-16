@@ -4,6 +4,7 @@ import { FileUpload } from './components/FileUpload'
 import { GraphCanvas } from './components/GraphCanvas'
 import { NodeInspector } from './components/NodeInspector'
 import { QueryPanel } from './components/QueryPanel'
+import { TopicsPanel } from './components/TopicsPanel'
 import { Legend } from './components/Legend'
 import { TableView } from './components/TableView'
 import { AddNodeModal, AddEdgeModal } from './components/AddNodeModal'
@@ -18,7 +19,7 @@ import {
   getNodeOrphans, getEdgeOrphanTarget, getEntityNeighbourhood,
   listDocuments,
 } from './api/client'
-import type { DocumentStatus, FGNode, FGLink, GraphNode } from './types/graph'
+import type { AgentDone, DocumentStatus, FGNode, FGLink, GraphNode, Topic } from './types/graph'
 import { SAMPLE_GRAPH } from './data/sampleGraph'
 
 // ── Modal state types ──────────────────────────────────────────────────────────
@@ -51,6 +52,10 @@ export default function App() {
   const [addEdgeModal,  setAddEdgeModal]  = useState<AddEdgeState | null>(null)
   const [delNodeModal,  setDelNodeModal]  = useState<DelNodeState | null>(null)
   const [delEdgeModal,  setDelEdgeModal]  = useState<DelEdgeState | null>(null)
+
+  // Nodes lit up by the last answer or the selected topic; everything else is dimmed.
+  const [highlight, setHighlight] = useState<Set<string> | null>(null)
+  const [activeTopic, setActiveTopic] = useState<string | null>(null)
 
   const { upload, uploading, status, error } = useDocumentUpload()
   const { graphData, loading: graphLoading, loadFullGraph, loadSample, resetGraph } = useGraphData()
@@ -260,7 +265,21 @@ export default function App() {
     editor.overlayData(toFGData(rawData))
   }, [editor])
 
+  const handleAgentResult = useCallback((result: AgentDone) => {
+    if (result.graph.nodes.length > 0) handleOverlayGraph(result.graph)
+    setActiveTopic(null)
+    setHighlight(result.highlight_ids.length > 0 ? new Set(result.highlight_ids) : null)
+  }, [handleOverlayGraph])
+
+  const handleTopicSelect = useCallback((topic: Topic | null) => {
+    setActiveTopic(topic?.id ?? null)
+    setHighlight(topic ? new Set(topic.member_ids) : null)
+    if (topic && editor.graph.nodes.length === 0) loadFullGraph()
+  }, [editor.graph.nodes.length, loadFullGraph])
+
   const nodeMap = new Map<string, FGNode>(editor.graph.nodes.map(n => [n.id, n]))
+  // Only dim the graph if some highlighted node is actually on screen.
+  const visibleHighlight = highlight && [...highlight].some(id => nodeMap.has(id)) ? highlight : undefined
   const completedDocs = documents.filter(d => d.status === 'complete')
 
   return (
@@ -270,7 +289,7 @@ export default function App() {
       <aside className="w-[320px] shrink-0 flex flex-col border-r border-border overflow-y-auto">
         <div className="px-7 pt-8 pb-6 border-b border-border">
           <h1 className="text-xl font-bold tracking-tight text-foreground">Synapse</h1>
-          <p className="text-xs text-chart-2 mt-1">PDF → entity graph · semantic search</p>
+          <p className="text-xs text-chart-2 mt-1">PDFs → knowledge graph · GraphRAG agent</p>
         </div>
 
         <div className="flex-1 px-7 py-6 space-y-8">
@@ -323,7 +342,7 @@ export default function App() {
                     {graphLoading ? 'Loading…' : 'Reload'}
                   </button>
                   <button
-                    onClick={() => { resetGraph(); setSelectedNode(null) }}
+                    onClick={() => { resetGraph(); setSelectedNode(null); setHighlight(null); setActiveTopic(null) }}
                     className="text-xs text-chart-2 border border-border rounded-sm px-3 py-1.5 hover:border-chart-3 hover:text-foreground transition-colors"
                   >
                     Clear
@@ -335,8 +354,14 @@ export default function App() {
 
           <section>
             <SectionLabel>Ask</SectionLabel>
-            <QueryPanel documentId={status?.document_id} onGraphContext={handleOverlayGraph} />
+            <QueryPanel onResult={handleAgentResult} />
           </section>
+
+          <TopicsPanel
+            refreshKey={completedDocs.length}
+            activeId={activeTopic}
+            onSelect={handleTopicSelect}
+          />
 
         </div>
       </aside>
@@ -385,6 +410,7 @@ export default function App() {
                 data={editor.graph}
                 selectedNodeId={selectedNode?.id ?? null}
                 drillStack={editor.drillStack}
+                highlightIds={visibleHighlight}
                 onNodeClick={(node) => setSelectedNode(node.id === selectedNode?.id ? null : node)}
                 onNodeDoubleClick={(node) => {
                   const drilled = editor.drillDown(node)

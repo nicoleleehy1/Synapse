@@ -26,3 +26,19 @@ def test_citations_are_numbered_once_per_chunk():
     assert run.cite({**hit, "chunk_id": "c2"}) == 2
     assert run.cite(hit) == 1
     assert len(run.sources) == 2
+
+
+async def test_unexpected_client_failure_ends_with_an_error_event():
+    from types import SimpleNamespace
+
+    from app.services.agent import GraphRAGAgent
+
+    class Broken:
+        def stream(self, **kwargs):
+            raise TypeError("Could not resolve authentication method")
+
+    client = SimpleNamespace(messages=Broken(), beta=SimpleNamespace(messages=Broken()))
+    agent = GraphRAGAgent(graph_store=None, client=client)  # type: ignore[arg-type]
+    events = [e async for e in agent.run("hi")]
+    assert events[-1]["type"] == "error"
+    assert "ANTHROPIC_API_KEY" in events[-1]["message"]

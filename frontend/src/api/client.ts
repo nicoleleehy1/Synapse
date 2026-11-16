@@ -1,5 +1,7 @@
 import axios from 'axios'
+import { readSSE } from '../lib/sse'
 import type {
+  AgentEvent, Topic,
   DocumentStatus, GraphData, QueryResponse,
   CreateNodePayload, UpdateNodePayload, CreateEdgePayload, GraphEdge, GraphNode,
   OrphanInfo, EdgeOrphanInfo,
@@ -118,4 +120,38 @@ export async function deleteNode(entityId: string, cascade: boolean): Promise<vo
 
 export async function deleteEdge(edgeId: string, cascade: boolean): Promise<void> {
   await api.delete(`/graph/edges/${edgeId}`, { params: { cascade } })
+}
+
+// ── GraphRAG agent ─────────────────────────────────────────────────────────
+
+/** Ask the GraphRAG agent; events (steps, answer tokens, final result) stream to `onEvent`. */
+export async function streamQuery(
+  query: string,
+  onEvent: (event: AgentEvent) => void,
+  opts: { documentId?: string; signal?: AbortSignal } = {},
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/query/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({ query, document_id: opts.documentId }),
+    signal: opts.signal,
+  })
+  if (!res.ok) {
+    let detail = `Request failed (${res.status})`
+    try { detail = (await res.json()).detail ?? detail } catch { /* not JSON */ }
+    if (res.status === 429) detail = 'Rate limit reached. Please try again later.'
+    throw new Error(detail)
+  }
+  await readSSE(res, ({ data }) => {
+    try {
+      onEvent(JSON.parse(data) as AgentEvent)
+    } catch {
+      // ignore keep-alives / malformed frames
+    }
+  }, opts.signal)
+}
+
+export async function listTopics(): Promise<Topic[]> {
+  const { data } = await api.get('/graph/topics')
+  return data
 }

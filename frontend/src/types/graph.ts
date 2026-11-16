@@ -118,3 +118,44 @@ export interface OrphanInfo {
 export interface EdgeOrphanInfo {
   orphaned_target: GraphNode | null
 }
+
+// ── GraphRAG agent stream ─────────────────────────────────────────────────────
+
+export type AgentTool =
+  | 'search_passages' | 'search_entities' | 'explore_entities' | 'search_topics' | 'run_cypher'
+
+export interface AgentStep {
+  id: string
+  tool: AgentTool | string
+  input: Record<string, unknown>
+  summary?: string
+  is_error?: boolean
+}
+
+export interface AgentDone {
+  answer: string
+  sources: SourceChunk[]
+  graph: GraphData
+  highlight_ids: string[]
+  steps: number
+  latency_ms: number
+}
+
+export type AgentEvent =
+  | ({ type: 'step' } & AgentStep)
+  | { type: 'step_result'; id: string; summary: string; is_error: boolean }
+  | { type: 'text'; delta: string }
+  | { type: 'text_reset' }
+  | ({ type: 'done' } & AgentDone)
+  | { type: 'error'; message: string }
+
+export interface Topic {
+  id: string
+  level: number
+  title: string
+  summary: string
+  findings: string[]
+  size: number
+  parent_id: string | null
+  member_ids: string[]
+}

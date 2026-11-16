@@ -223,6 +223,13 @@ class GraphRAGAgent:
                 logger.exception("Agent LLM call failed")
                 yield {"type": "error", "message": f"Claude API error: {getattr(exc, 'message', exc)}"}
                 return
+            except Exception:  # noqa: BLE001 - e.g. a missing API key; the stream must end with an event
+                logger.exception("Agent LLM call failed")
+                yield {
+                    "type": "error",
+                    "message": "Couldn't reach Claude. Check that ANTHROPIC_API_KEY is set on the server.",
+                }
+                return
 
             usage["input_tokens"] += getattr(message.usage, "input_tokens", 0) or 0
             usage["output_tokens"] += getattr(message.usage, "output_tokens", 0) or 0

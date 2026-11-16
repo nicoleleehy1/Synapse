@@ -105,9 +105,7 @@ def detect_communities(
             continue  # a broad topic with no meaningful sub-structure
         for child in children:
             if len(child) >= MIN_COMMUNITY_SIZE:
-                out.append(
-                    Community(id=community_id(0, child), level=0, members=child, parent_id=top.id)
-                )
+                out.append(Community(id=community_id(0, child), level=0, members=child, parent_id=top.id))
     return out
 
 
