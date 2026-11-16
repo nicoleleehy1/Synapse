@@ -16,6 +16,8 @@ services:
 
   backend:
     build: ./backend
+    ports:
+      - "127.0.0.1:8000:8000"   # API + /docs (localhost only)
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY in .env}
       NEO4J_URI: bolt://neo4j:7687
