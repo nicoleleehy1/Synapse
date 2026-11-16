@@ -129,8 +129,13 @@ async def stream_status(
 
 
 @router.delete("/{document_id}")
-async def delete_document(document_id: str, graph_store: GraphStore = Depends(get_graph_store)):
+async def delete_document(
+    document_id: str, request: Request, graph_store: GraphStore = Depends(get_graph_store)
+):
     if not await graph_store.get_document(document_id):
         raise HTTPException(status_code=404, detail="Document not found.")
     await graph_store.delete_document(document_id)
+    scheduler = getattr(request.app.state, "communities", None)
+    if scheduler:
+        scheduler.request()  # topics change when a document leaves the graph
     return {"message": "Deleted."}

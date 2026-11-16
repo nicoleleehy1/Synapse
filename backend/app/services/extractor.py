@@ -128,6 +128,7 @@ class Extractor:
                     confidence=max(0.0, min(1.0, r.confidence)),
                     source_chunk_id=chunk.id,
                     source_document=chunk.document_name,
+                    document_id=chunk.document_id,
                 )
             )
         return ExtractionResult(entities=list(entity_map.values()), relationships=relationships)

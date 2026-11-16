@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from app.config import settings
@@ -47,8 +48,10 @@ class Pipeline:
         broker: ProgressBroker | None = None,
         pdf: PDFProcessor | None = None,
         chunker: Chunker | None = None,
+        on_complete: Callable[[], None] | None = None,
     ) -> None:
         self._gs = graph_store
+        self._on_complete = on_complete
         self._extractor = extractor or Extractor()
         self._embedder = embedder
         self._broker = broker or default_broker
@@ -106,6 +109,7 @@ class Pipeline:
                 return ents, [resolver.embedding_for(e) for e in ents], rels
 
             entities, ent_vecs, relationships = await asyncio.to_thread(_resolve)
+            merged = await self._link_to_existing(entities, ent_vecs, relationships, status.document_id)
 
             await self._emit(
                 status,
@@ -118,12 +122,15 @@ class Pipeline:
 
             await self._emit(status, status="complete", stage="done", progress=1.0)
             logger.info(
-                "Processed %s: %d chunks, %d entities, %d relationships",
+                "Processed %s: %d chunks, %d entities (%d linked to other documents), %d relationships",
                 status.filename,
                 len(chunks),
                 len(entities),
+                merged,
                 len(relationships),
             )
+            if self._on_complete:
+                self._on_complete()
         except Exception as exc:  # noqa: BLE001 - surface any failure to the user
             logger.exception("Pipeline failed for %s", status.filename)
             try:
@@ -131,6 +138,32 @@ class Pipeline:
             except Exception:  # noqa: BLE001 - DB unreachable; the restart sweep will fail the job
                 logger.exception("Could not record failure for %s", status.document_id)
         return status
+
+    async def _link_to_existing(self, entities, vecs, relationships, document_id: str) -> int:
+        """Cross-document entity resolution.
+
+        Each new canonical entity is compared (vector index, same type) against
+        entities already extracted from *other* documents; a match adopts the
+        existing node's id, so the write merges provenance into it instead of
+        creating a duplicate. Returns the number of entities linked.
+        """
+        rows = [
+            {"idx": i, "type": e.type, "embedding": v.tolist()}
+            for i, (e, v) in enumerate(zip(entities, vecs, strict=True))
+            if v is not None
+        ]
+        matches = await self._gs.match_existing_entities(
+            rows, settings.entity_similarity_threshold, exclude_document=document_id
+        )
+        remap: dict[str, str] = {}
+        for idx, existing_id in matches.items():
+            remap[entities[idx].id] = existing_id
+            entities[idx].id = existing_id
+        if remap:
+            for r in relationships:
+                r.source_entity_id = remap.get(r.source_entity_id, r.source_entity_id)
+                r.target_entity_id = remap.get(r.target_entity_id, r.target_entity_id)
+        return len(remap)
 
     async def _extract_all(self, chunks: list[TextChunk], status: DocumentStatus) -> list[ExtractionResult]:
         sem = asyncio.Semaphore(settings.extraction_concurrency)

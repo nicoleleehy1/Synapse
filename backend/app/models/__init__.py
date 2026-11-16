@@ -1,4 +1,6 @@
 from .schema import (
+    AgentQueryResponse,
+    CommunityOut,
     CreateEdgeRequest,
     CreateNodeRequest,
     CypherRequest,
@@ -38,4 +40,6 @@ __all__ = [
     "OrphanInfo",
     "EdgeOrphanInfo",
     "CypherRequest",
+    "AgentQueryResponse",
+    "CommunityOut",
 ]

@@ -11,6 +11,8 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.routers import documents_router, graph_router, query_router
+from app.services.agent import GraphRAGAgent
+from app.services.communities import CommunityBuilder, CommunityScheduler
 from app.services.graph_store import GraphStore
 from app.services.pipeline import Pipeline
 from app.services.retriever import Retriever
@@ -29,8 +31,10 @@ async def lifespan(app: FastAPI):
         gs = GraphStore()
         await gs.connect()
         app.state.graph_store = gs
-        app.state.pipeline = Pipeline(graph_store=gs)
+        app.state.communities = CommunityScheduler(CommunityBuilder(graph_store=gs))
+        app.state.pipeline = Pipeline(graph_store=gs, on_complete=app.state.communities.request)
         app.state.retriever = Retriever(graph_store=gs)
+        app.state.agent = GraphRAGAgent(graph_store=gs)
         interrupted = await gs.fail_interrupted_documents()
         if interrupted:
             logger.warning("Marked %d interrupted ingestion job(s) as failed", interrupted)

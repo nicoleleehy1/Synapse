@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from app.services.agent import GraphRAGAgent
 from app.services.graph_store import GraphStore
 from app.services.pipeline import Pipeline
 from app.services.retriever import Retriever
@@ -19,3 +20,7 @@ def get_pipeline(request: Request) -> Pipeline:
 
 def get_retriever(request: Request) -> Retriever:
     return request.app.state.retriever
+
+
+def get_agent(request: Request) -> GraphRAGAgent:
+    return request.app.state.agent

@@ -101,6 +101,16 @@ class GraphStore:
                 "CREATE VECTOR INDEX entity_embedding IF NOT EXISTS FOR (e:Entity) ON e.embedding "
                 f"OPTIONS {{indexConfig: {{`vector.dimensions`: {dim}, `vector.similarity_function`: 'cosine'}}}}"
             ),
+            "CREATE CONSTRAINT community_id IF NOT EXISTS FOR (c:Community) REQUIRE c.id IS UNIQUE",
+            (
+                "CREATE VECTOR INDEX community_embedding IF NOT EXISTS FOR (c:Community) ON c.embedding "
+                f"OPTIONS {{indexConfig: {{`vector.dimensions`: {dim}, `vector.similarity_function`: 'cosine'}}}}"
+            ),
+            # Migration: entities may now belong to several documents.
+            (
+                "MATCH (e:Entity) WHERE e.document_ids IS NULL "
+                "SET e.document_ids = CASE WHEN e.document_id IS NULL THEN [] ELSE [e.document_id] END"
+            ),
         ]
         for stmt in statements:
             await self._run(stmt)
@@ -183,6 +193,7 @@ class GraphStore:
                 "description": e.description or "",
                 "source_document": e.source_document,
                 "document_id": e.document_id,
+                "document_ids": [e.document_id] if e.document_id else [],
                 "aliases": e.aliases,
                 "chunk_ids": e.source_chunk_ids,
                 "embedding": vec.tolist() if vec is not None else None,
@@ -194,12 +205,21 @@ class GraphStore:
                 """
                 UNWIND $rows AS row
                 MERGE (e:Entity {id: row.id})
-                SET e.name = row.name, e.type = row.type, e.description = row.description,
+                ON CREATE SET e.name = row.name, e.type = row.type, e.description = row.description,
                     e.source_document = row.source_document, e.document_id = row.document_id,
-                    e.aliases = row.aliases, e.source_chunk_ids = row.chunk_ids
-                WITH e, row
-                CALL (e, row) {
-                    WITH e, row WHERE row.embedding IS NOT NULL
+                    e.aliases = [], e.source_chunk_ids = [], e.document_ids = [], e.new = true
+                // Existing entity (cross-document match): union provenance, keep its identity.
+                WITH e, row, row.aliases + CASE WHEN row.name <> e.name THEN [row.name] ELSE [] END AS names
+                SET e.aliases = e.aliases + [a IN names WHERE NOT a IN e.aliases AND a <> e.name],
+                    e.source_chunk_ids = e.source_chunk_ids + [c IN row.chunk_ids WHERE NOT c IN e.source_chunk_ids],
+                    e.document_ids = e.document_ids + [d IN row.document_ids WHERE NOT d IN e.document_ids],
+                    e.description = CASE WHEN coalesce(e.description, '') = '' THEN row.description
+                                         ELSE e.description END
+                WITH e, row, coalesce(e.new, false) AS created
+                REMOVE e.new
+                WITH e, row, created
+                CALL (e, row, created) {
+                    WITH e, row, created WHERE row.embedding IS NOT NULL AND created
                     CALL db.create.setNodeVectorProperty(e, 'embedding', row.embedding)
                 }
                 WITH e, row
@@ -220,6 +240,7 @@ class GraphStore:
                 "confidence": r.confidence,
                 "chunk_id": r.source_chunk_id,
                 "source_document": r.source_document,
+                "document_id": r.document_id,
             }
             for r in relationships
         ]
@@ -231,7 +252,7 @@ class GraphStore:
                 MERGE (src)-[r:RELATES {id: row.id}]->(tgt)
                 SET r.type = row.type, r.description = row.description,
                     r.confidence = row.confidence, r.source_chunk_id = row.chunk_id,
-                    r.source_document = row.source_document
+                    r.source_document = row.source_document, r.document_id = row.document_id
                 """,
                 rows=batch,
             )
@@ -276,7 +297,7 @@ ORDER BY score DESC LIMIT $k""".strip()
         rows = await self._run(
             """
             MATCH (e:Entity)
-            WHERE $doc IS NULL OR e.document_id = $doc
+            WHERE $doc IS NULL OR $doc IN e.document_ids
             WITH e LIMIT $limit
             WITH collect(e) AS ents
             UNWIND ents AS e
@@ -361,9 +382,194 @@ ORDER BY score DESC LIMIT $k""".strip()
     # ------------------------------------------------------------------
 
     async def delete_document(self, document_id: str) -> None:
-        await self._run("MATCH (e:Entity {document_id: $doc}) DETACH DELETE e", doc=document_id)
+        # Entities shared with other documents survive; they just lose this provenance.
+        await self._run("MATCH ()-[r:RELATES {document_id: $doc}]->() DELETE r", doc=document_id)
+        await self._run(
+            """
+            MATCH (e:Entity) WHERE $doc IN e.document_ids
+            SET e.document_ids = [d IN e.document_ids WHERE d <> $doc]
+            WITH e WHERE size(e.document_ids) = 0
+            DETACH DELETE e
+            """,
+            doc=document_id,
+        )
         await self._run("MATCH (c:Chunk {document_id: $doc}) DETACH DELETE c", doc=document_id)
         await self._run("MATCH (d:Document {id: $doc}) DETACH DELETE d", doc=document_id)
+
+    # ------------------------------------------------------------------
+    # Cross-document entity resolution
+    # ------------------------------------------------------------------
+
+    async def match_existing_entities(
+        self, rows: list[dict[str, Any]], threshold: float, exclude_document: str | None
+    ) -> dict[int, str]:
+        """For each {idx, type, embedding}, the id of the most similar existing entity of the
+        same type (cosine >= threshold) from *other* documents."""
+        if not rows:
+            return {}
+        out = await self._run(
+            """
+            UNWIND $rows AS row
+            CALL (row) {
+                CALL db.index.vector.queryNodes('entity_embedding', 5, row.embedding) YIELD node, score
+                WHERE node.type = row.type AND score >= $threshold
+                  AND ($exclude IS NULL OR NOT $exclude IN node.document_ids)
+                RETURN node.id AS match_id, score ORDER BY score DESC LIMIT 1
+            }
+            RETURN row.idx AS idx, match_id
+            """,
+            rows=rows,
+            threshold=threshold,
+            exclude=exclude_document,
+        )
+        return {r["idx"]: r["match_id"] for r in out}
+
+    # ------------------------------------------------------------------
+    # Communities
+    # ------------------------------------------------------------------
+
+    async def entity_edges(self) -> list[tuple[str, str, float]]:
+        rows = await self._run(
+            "MATCH (a:Entity)-[r:RELATES]->(b:Entity) RETURN a.id AS a, b.id AS b, r.confidence AS w"
+        )
+        return [(r["a"], r["b"], float(r["w"] if r["w"] is not None else 1.0)) for r in rows]
+
+    async def community_ids(self) -> set[str]:
+        rows = await self._run("MATCH (c:Community) WHERE c.summary IS NOT NULL RETURN c.id AS id")
+        return {r["id"] for r in rows}
+
+    async def community_context(
+        self, members: list[str], max_entities: int, max_relationships: int
+    ) -> tuple[list[dict], list[dict]]:
+        ents = await self._run(
+            """
+            MATCH (e:Entity) WHERE e.id IN $ids
+            RETURN e.id AS id, e.name AS name, e.type AS type, e.description AS description,
+                   COUNT { (e)-[:RELATES]-() } AS degree
+            ORDER BY degree DESC LIMIT $limit
+            """,
+            ids=members,
+            limit=max_entities,
+        )
+        rels = await self._run(
+            """
+            MATCH (a:Entity)-[r:RELATES]->(b:Entity) WHERE a.id IN $ids AND b.id IN $ids
+            RETURN a.name AS src, b.name AS tgt, r.type AS type, r.description AS description
+            ORDER BY r.confidence DESC LIMIT $limit
+            """,
+            ids=members,
+            limit=max_relationships,
+        )
+        return ents, rels
+
+    async def replace_communities(self, keep_ids: set[str], new: list, embeddings: np.ndarray) -> None:
+        await self._run("MATCH (c:Community) WHERE NOT c.id IN $keep DETACH DELETE c", keep=list(keep_ids))
+        rows = [
+            {
+                "id": c.id,
+                "level": c.level,
+                "parent": c.parent_id,
+                "title": c.title,
+                "summary": c.summary,
+                "findings": c.findings,
+                "members": c.members,
+                "embedding": embeddings[i].tolist(),
+            }
+            for i, c in enumerate(new)
+        ]
+        # Parents first so PART_OF can attach.
+        rows.sort(key=lambda r: -r["level"])
+        for batch in _batches(rows):
+            await self._run(
+                """
+                UNWIND $rows AS row
+                MERGE (c:Community {id: row.id})
+                SET c.level = row.level, c.title = row.title, c.summary = row.summary,
+                    c.findings = row.findings, c.size = size(row.members)
+                WITH c, row
+                CALL db.create.setNodeVectorProperty(c, 'embedding', row.embedding)
+                WITH c, row
+                CALL (c, row) {
+                    WITH c, row WHERE row.parent IS NOT NULL
+                    MATCH (p:Community {id: row.parent})
+                    MERGE (c)-[:PART_OF]->(p)
+                }
+                WITH c, row
+                UNWIND row.members AS mid
+                MATCH (e:Entity {id: mid})
+                MERGE (e)-[:IN_COMMUNITY]->(c)
+                """,
+                rows=batch,
+            )
+
+    async def search_communities(self, vector: np.ndarray, k: int = 5) -> list[dict[str, Any]]:
+        return await self._run(
+            """
+            CALL db.index.vector.queryNodes('community_embedding', $k, $vector) YIELD node, score
+            OPTIONAL MATCH (e:Entity)-[:IN_COMMUNITY]->(node)
+            WITH node, score, e ORDER BY COUNT { (e)-[:RELATES]-() } DESC
+            WITH node, score, collect(e.name)[..8] AS top_entities, collect(e.id) AS member_ids
+            RETURN node.id AS id, node.level AS level, node.title AS title, node.summary AS summary,
+                   node.findings AS findings, node.size AS size, top_entities, member_ids, score
+            ORDER BY score DESC
+            """,
+            vector=vector.tolist(),
+            k=k,
+        )
+
+    async def list_communities(self) -> list[dict[str, Any]]:
+        return await self._run(
+            """
+            MATCH (c:Community)
+            OPTIONAL MATCH (c)-[:PART_OF]->(p:Community)
+            RETURN c.id AS id, c.level AS level, c.title AS title, c.summary AS summary,
+                   c.findings AS findings, c.size AS size, p.id AS parent_id,
+                   [(e:Entity)-[:IN_COMMUNITY]->(c) | e.id] AS member_ids
+            ORDER BY c.level DESC, c.size DESC
+            """
+        )
+
+    # ------------------------------------------------------------------
+    # Entity search (agent tool)
+    # ------------------------------------------------------------------
+
+    async def search_entities(self, text: str, vector: np.ndarray, k: int = 8) -> list[dict[str, Any]]:
+        """Hybrid entity lookup: full-text on names/descriptions fused with vector similarity
+        (reciprocal rank fusion)."""
+        rows = await self._run(
+            """
+            CALL () {
+                CALL db.index.fulltext.queryNodes('entity_names', $q, {limit: $k}) YIELD node, score
+                WITH collect(node) AS ns
+                UNWIND range(0, size(ns) - 1) AS rank
+                RETURN ns[rank] AS node, 1.0 / (60 + rank) AS rrf
+                UNION ALL
+                CALL db.index.vector.queryNodes('entity_embedding', $k, $vector) YIELD node, score
+                WITH collect(node) AS ns
+                UNWIND range(0, size(ns) - 1) AS rank
+                RETURN ns[rank] AS node, 1.0 / (60 + rank) AS rrf
+            }
+            WITH node, sum(rrf) AS fused
+            RETURN node.id AS id, node.name AS name, node.type AS type,
+                   node.description AS description, node.aliases AS aliases,
+                   COUNT { (node)-[:RELATES]-() } AS degree, fused
+            ORDER BY fused DESC LIMIT $k
+            """,
+            q=_lucene_escape(text),
+            vector=vector.tolist(),
+            k=k,
+        )
+        return rows
+
+    async def chunks_by_ids(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
+        return await self._run(
+            """
+            MATCH (c:Chunk) WHERE c.id IN $ids
+            RETURN c.id AS chunk_id, c.text AS text, c.page_number AS page_number,
+                   c.document_id AS document_id, c.document_name AS document_name
+            """,
+            ids=chunk_ids,
+        )
 
     # ------------------------------------------------------------------
     # Manual graph mutations
@@ -486,6 +692,13 @@ ORDER BY score DESC LIMIT $k""".strip()
 def _batches(rows: list[dict], size: int = _WRITE_BATCH):
     for i in range(0, len(rows), size):
         yield rows[i : i + size]
+
+
+_LUCENE_SPECIAL = set('+-&|!(){}[]^"~*?:\\/')
+
+
+def _lucene_escape(text: str) -> str:
+    return "".join(f"\\{ch}" if ch in _LUCENE_SPECIAL else ch for ch in text) or "*"
 
 
 def _jsonable(value: Any) -> Any:

@@ -40,6 +40,7 @@ class Relationship(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0, default=1.0)
     source_chunk_id: str
     source_document: str
+    document_id: str | None = None
 
 
 class ExtractionResult(BaseModel):
@@ -119,6 +120,26 @@ class SourceChunk(BaseModel):
     page_number: int
     document_name: str
     similarity_score: float
+
+
+class AgentQueryResponse(BaseModel):
+    answer: str
+    sources: list[SourceChunk]
+    graph_context: GraphResponse
+    highlight_ids: list[str] = Field(default_factory=list)
+    steps: int = 0
+    latency_ms: int = 0
+
+
+class CommunityOut(BaseModel):
+    id: str
+    level: int
+    title: str
+    summary: str
+    findings: list[str] = Field(default_factory=list)
+    size: int
+    parent_id: str | None = None
+    member_ids: list[str] = Field(default_factory=list)
 
 
 class QueryResponse(BaseModel):
