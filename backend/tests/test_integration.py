@@ -18,6 +18,7 @@ from app.services.extractor import Extractor, _ExtractionPayload
 from app.services.graph_store import GraphStore, ReadOnlyViolation
 from app.services.pipeline import Pipeline
 from app.services.retriever import Retriever
+from app.services.study import StudyService, _CardBatch
 from tests.fakes import FakeAnthropic, ScriptedAnthropic, text_block, tool_block
 
 pytestmark = [
@@ -38,7 +39,9 @@ async def store():
 
 @pytest_asyncio.fixture(autouse=True)
 async def clean(store):
-    await store._run("MATCH (n) WHERE n:Entity OR n:Chunk OR n:Document OR n:Community DETACH DELETE n")
+    await store._run(
+        "MATCH (n) WHERE n:Entity OR n:Chunk OR n:Document OR n:Community OR n:Card OR n:Review DETACH DELETE n"
+    )
     yield
 
 
@@ -194,9 +197,17 @@ async def client(store):
             ]
         ),
     )
+    app.state.study = StudyService(graph_store=store, client=FakeAnthropic(parse_fn=_fake_cards))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+def _fake_cards(kwargs):
+    n = kwargs["messages"][0]["content"].count("<fact ")
+    cards = [{"fact": i, "front": f"Question {i}?", "back": f"Answer {i}."} for i in range(1, n + 1)]
+    cards.append({"fact": 99, "front": "out of range", "back": "dropped"})
+    return _CardBatch.model_validate({"cards": cards})
 
 
 async def test_upload_stream_query_delete(client, pdf_factory):
@@ -241,8 +252,38 @@ async def test_upload_stream_query_delete(client, pdf_factory):
     ).status_code == 403
     assert (await client.post("/graph/cypher", json={"cypher": "MATCH (n RETURN n"})).status_code == 400
 
+    # Source viewer: the PDF is kept and each passage knows where it sits on the page.
+    pdf_resp = await client.get(f"/documents/{doc_id}/pdf")
+    assert pdf_resp.status_code == 200 and pdf_resp.content.startswith(b"%PDF-")
+    chunk = (await client.get(f"/documents/chunks/{ans['sources'][0]['chunk_id']}")).json()
+    assert chunk["has_pdf"] and chunk["highlights"]
+    assert all(0 <= h["x0"] < h["x1"] <= 1 for h in chunk["highlights"])
+    assert (await client.get("/documents/chunks/nope")).status_code == 404
+
+    # Flashcards from the graph's relationships, then one review.
+    created = (await client.post("/study/generate", json={"document_id": doc_id, "count": 5})).json()
+    assert created["created"] == status["relationship_count"]
+    due = (await client.get("/study/due")).json()
+    assert len(due) == created["created"] and due[0]["state"] == "new"
+    assert due[0]["intervals"]["1"] < due[0]["intervals"]["3"] < due[0]["intervals"]["4"]
+    reviewed = (await client.post(f"/study/cards/{due[0]['id']}/review", json={"rating": 3})).json()
+    assert reviewed["state"] == "review" and reviewed["reps"] == 1
+    assert (await client.post("/study/cards/nope/review", json={"rating": 3})).status_code == 404
+    assert (await client.post(f"/study/cards/{due[0]['id']}/review", json={"rating": 5})).status_code == 422
+    mastery = {m["entity_id"]: m for m in (await client.get("/study/mastery")).json()}
+    assert set(due[0]["entity_ids"]) <= set(mastery)
+    assert max(m["mastery"] for m in mastery.values()) == pytest.approx(1.0, abs=0.01)
+    stats = (await client.get("/study/stats", params={"tz_offset_minutes": -480})).json()
+    assert stats["reviewed_today"] == 1 and stats["streak_days"] == 1 and stats["activity"][-1] == 1
+    assert stats["retention_30d"] == 1.0
+
+    from app.services.pipeline import stored_pdf_path
+
+    assert stored_pdf_path(doc_id).exists()
     assert (await client.delete(f"/documents/{doc_id}")).status_code == 200
     assert (await client.get(f"/documents/{doc_id}/status")).status_code == 404
+    assert not stored_pdf_path(doc_id).exists()
+    assert (await client.get("/study/due")).json() == []  # cards go with their document
 
 
 async def test_upload_validation(client, tmp_path):

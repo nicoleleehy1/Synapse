@@ -159,3 +159,58 @@ export interface Topic {
   parent_id: string | null
   member_ids: string[]
 }
+
+// ── Learning layer ────────────────────────────────────────────────────────────
+
+export interface Highlight {
+  page: number
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+}
+
+export interface ChunkDetail {
+  chunk_id: string
+  text: string
+  page_number: number
+  document_id: string
+  document_name: string
+  highlights: Highlight[]
+  has_pdf: boolean
+}
+
+export type Rating = 1 | 2 | 3 | 4
+
+export interface Card {
+  id: string
+  front: string
+  back: string
+  chunk_id: string | null
+  document_id: string | null
+  entity_ids: string[]
+  entity_names: string[]
+  state: 'new' | 'review' | 'relearning'
+  reps: number
+  lapses: number
+  due_ms: number
+  /** Seconds until the card would next be due for each rating. */
+  intervals: Record<Rating, number>
+}
+
+export interface EntityMastery {
+  entity_id: string
+  mastery: number
+  cards: number
+  due: number
+}
+
+export interface StudyStats {
+  total: number
+  new: number
+  due: number
+  reviewed_today: number
+  retention_30d: number | null
+  streak_days: number
+  activity: number[]
+}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import { forceCollide } from 'd3-force'
 import { ChevronLeft, Pencil, Trash2 } from 'lucide-react'
+import { masteryColor } from '../lib/study'
 import type { FGData, FGNode, FGLink } from '../types/graph'
 import type { DrillLevel } from '../hooks/useGraphEditor'
 
@@ -10,6 +11,8 @@ interface Props {
   selectedNodeId: string | null
   /** Entities the last answer drew on: everything else is dimmed. */
   highlightIds?: ReadonlySet<string>
+  /** Per-entity mastery (0-1) from spaced repetition, drawn as a coloured ring. */
+  mastery?: ReadonlyMap<string, number>
   drillStack: DrillLevel[]
   onNodeClick: (node: FGNode) => void
   onNodeDoubleClick: (node: FGNode) => void
@@ -168,7 +171,7 @@ function EdgeLabelPopover({ initial = '', onConfirm, onClose }: {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function GraphCanvas({
-  data, selectedNodeId, highlightIds, drillStack,
+  data, selectedNodeId, highlightIds, mastery, drillStack,
   onNodeClick, onNodeDoubleClick, onDrillUp,
   onCreateNode, onEditNode, onDeleteNode,
   onCreateEdge, onDeleteEdge, onUpdateEdge,
@@ -401,6 +404,13 @@ export function GraphCanvas({
     const x = (node.x ?? 0) - nodeW / 2
     const y = (node.y ?? 0) - nodeH / 2
 
+    const m = mastery?.get(node.id)
+    if (m !== undefined) {
+      drawRoundedRect(ctx, x - 3, y - 3, nodeW + 6, nodeH + 6, RADIUS + 3)
+      ctx.fillStyle = masteryColor(m)
+      ctx.fill()
+    }
+
     if (isSelected || (highlightIds?.has(node.id) ?? false)) {
       drawRoundedRect(ctx, x - 2.5, y - 2.5, nodeW + 5, nodeH + 5, RADIUS + 2)
       ctx.strokeStyle = '#0a0a0a'
@@ -416,7 +426,7 @@ export function GraphCanvas({
     ctx.textBaseline = 'middle'
     ctx.fillText(label, node.x ?? 0, node.y ?? 0)
     ctx.globalAlpha = 1
-  }, [selectedNodeId, highlightIds])
+  }, [selectedNodeId, highlightIds, mastery])
 
   const nodePointerAreaPaint = useCallback((node: FGNode, color: string, ctx: CanvasRenderingContext2D) => {
     ctx.font = `500 ${FONT_SIZE}px Inter, system-ui, sans-serif`

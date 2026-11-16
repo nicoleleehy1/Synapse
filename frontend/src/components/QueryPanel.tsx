@@ -9,6 +9,8 @@ import type { AgentDone, AgentStep } from '../types/graph'
 interface Props {
   documentId?: string
   onResult: (result: AgentDone) => void
+  /** Open the source page of a cited passage. */
+  onOpenSource?: (chunkId: string) => void
 }
 
 const TOOL_META: Record<string, { label: string; icon: typeof Search }> = {
@@ -25,7 +27,7 @@ const EXAMPLES = [
   'Which organizations are mentioned most often?',
 ]
 
-export function QueryPanel({ documentId, onResult }: Props) {
+export function QueryPanel({ documentId, onResult, onOpenSource }: Props) {
   const [query, setQuery] = useState('')
   const [openSource, setOpenSource] = useState<number | null>(null)
   const [showTrace, setShowTrace] = useState(true)
@@ -149,6 +151,14 @@ export function QueryPanel({ documentId, onResult }: Props) {
             [{openSource}] {sources[openSource - 1].document_name} · page {sources[openSource - 1].page_number}
           </p>
           <p className="text-xs text-chart-4 leading-relaxed">{sources[openSource - 1].text}</p>
+          {onOpenSource && (
+            <button
+              onClick={() => onOpenSource(sources[openSource - 1].chunk_id)}
+              className="mt-1.5 text-2xs font-medium text-foreground underline underline-offset-2 hover:text-chart-4"
+            >
+              View on the page
+            </button>
+          )}
         </blockquote>
       )}
 

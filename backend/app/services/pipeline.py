@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -26,12 +27,19 @@ from app.services.events import ProgressBroker
 from app.services.events import broker as default_broker
 from app.services.extractor import Extractor
 from app.services.graph_store import GraphStore
+from app.services.locator import SourceLocator
 from app.services.pdf_processor import PDFProcessor
 from app.services.resolver import EntityResolver
 
 logger = logging.getLogger(__name__)
 
+
 # Fractions of the progress bar allotted to each stage.
+def stored_pdf_path(document_id: str) -> Path:
+    # document ids are server-generated UUIDs; never build this path from user input.
+    return Path(settings.pdf_dir) / f"{document_id}.pdf"
+
+
 _P_PARSED, _P_EMBEDDED, _P_EXTRACTED, _P_RESOLVED = 0.05, 0.15, 0.85, 0.92
 
 
@@ -91,6 +99,8 @@ class Pipeline:
                 self._chunker.chunk_pages, pages, status.document_id, status.filename
             )
 
+            await asyncio.to_thread(self._attach_highlights, pdf_path, chunks)
+
             await self._emit(status, stage="embedding", chunk_count=len(chunks))
             vecs = await embed_async([c.text for c in chunks], self.embedder)
             await self._gs.write_chunks(chunks, vecs)
@@ -120,6 +130,10 @@ class Pipeline:
             )
             await self._gs.write_graph(entities, ent_vecs, relationships)
 
+            if settings.retain_pdfs:
+                await asyncio.to_thread(self._keep_pdf, pdf_path, status.document_id)
+                await self._gs.set_document_pdf(status.document_id, True)
+
             await self._emit(status, status="complete", stage="done", progress=1.0)
             logger.info(
                 "Processed %s: %d chunks, %d entities (%d linked to other documents), %d relationships",
@@ -138,6 +152,22 @@ class Pipeline:
             except Exception:  # noqa: BLE001 - DB unreachable; the restart sweep will fail the job
                 logger.exception("Could not record failure for %s", status.document_id)
         return status
+
+    @staticmethod
+    def _attach_highlights(pdf_path: str | Path, chunks: list[TextChunk]) -> None:
+        """Record where each chunk sits on the page; best effort, never fails ingestion."""
+        try:
+            locator = SourceLocator(pdf_path)
+            for c in chunks:
+                c.highlights = locator.locate(c.text, c.page_number)
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not locate passages in %s", pdf_path)
+
+    @staticmethod
+    def _keep_pdf(pdf_path: str | Path, document_id: str) -> None:
+        dest = stored_pdf_path(document_id)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(pdf_path, dest)
 
     async def _link_to_existing(self, entities, vecs, relationships, document_id: str) -> int:
         """Cross-document entity resolution.

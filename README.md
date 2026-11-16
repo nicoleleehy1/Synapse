@@ -15,6 +15,8 @@
 3. **Ask questions across every document.** A GraphRAG agent decides how to answer. It searches passages, looks up and walks entities, reads topic reports for "big picture" questions, or writes its own read-only Cypher. Its reasoning streams to the browser step by step, the answer cites source pages, and the nodes it used light up on the graph.
 4. **Browse topics.** Leiden community detection groups the graph into a two-level hierarchy of topics, and Claude writes a report for each one. Click a topic to light up its members.
 5. **One graph, many documents.** Entities from a new upload are merged with matching ones already in the graph, so an organisation named in three PDFs is one node with edges from all three.
+6. **Learn it.** Claude turns relationships in the graph into flashcards grounded in their source passages. You review them on an FSRS spaced-repetition schedule, and a mastery heatmap on the graph shows what you know and what is fading.
+7. **Check the source.** Every citation and flashcard opens the original PDF page with the exact passage highlighted.
 
 ## Architecture
 
@@ -62,11 +64,13 @@ flowchart LR
 | GraphRAG agent | Claude runs a tool loop (strict tool schemas, prompt caching, a step budget that forces an answer) over five tools: passage vector search, hybrid entity search (full-text + vector fused with reciprocal rank fusion), multi-hop neighbourhood walks, topic-report search, and text-to-Cypher in the read-only sandbox. Steps, tool results and answer tokens stream over SSE | Picks the right retrieval per question instead of one fixed pipeline, and self-corrects when a Cypher query fails or returns nothing |
 | Communities | Bottom-up hierarchical **Leiden**: fine communities, then Leiden again on the quotient graph to group them into broad topics. Community ids hash their member set, so a rebuild only re-summarises communities that changed; rebuilds are debounced in the background | Answers corpus-level questions ("what are the main themes?") that nearest-passage retrieval can't |
 | Cross-document merge | New entities are matched against the existing graph through the entity vector index (same type, cosine above a threshold); entities and edges record which documents mention them, and deleting a document removes only what it contributed | One knowledge graph across uploads, with clean deletes |
+| Spaced repetition | A from-scratch implementation of **FSRS-5**, the memory model Anki uses: per-card stability and difficulty, a power-law forgetting curve, and intervals solved for 90% target retention. Cards test single graph edges and link to the passage they came from. Mastery per entity is the mean recall probability of its cards *right now*, so the heatmap fades between reviews exactly as the model predicts | Turns a document graph into something you can actually learn, with scheduling backed by a published model instead of fixed intervals |
+| Source highlighting | At ingest, each chunk is aligned against the PDF's word boxes on normalised tokens (start and end anchors), and the matched words are merged into one rectangle per line, stored as page fractions. The viewer renders the page with **pdf.js** (code-split, loaded on first use) and overlays the rectangles | Exact provenance for every answer and card, even though chunk text was cleaned and can't be found by substring search |
 | Evaluation | `backend/eval/` ingests a fictional three-document corpus and grades the fixed pipeline against the agent on local, multi-hop, aggregation, global and unanswerable questions, using a blind Claude judge with key-fact recall | Measured, not asserted |
 | Entity resolution | Exact-key short-circuit plus vectorised cosine similarity per entity type, one embedding call per batch | Merges "Ada Lovelace" and "ada lovelace" without ever merging across types |
 | Embeddings | `fastembed` (ONNX Runtime) running all-MiniLM-L6-v2 on CPU, baked into the image | Same model as sentence-transformers without PyTorch, so the image is roughly 10x smaller |
 | Security | User Cypher runs in a **READ-mode transaction** (the database rejects every write) with a server-side timeout and row cap; uploads checked for size, page count and PDF magic bytes; per-IP rate limits on endpoints that spend tokens; no default credentials | Safe to put on the public internet |
-| Testing | 39 pytest tests, including end-to-end upload → SSE → graph → query → delete against a **real Neo4j**, plus Vitest tests for the client, the SSE parser and the agent state machine; all run in GitHub Actions | Confidence that the whole system works, not just its units |
+| Testing | 52 pytest tests, including end-to-end upload → SSE → graph → query → delete against a **real Neo4j**, plus Vitest tests for the client, the SSE parser and the agent state machine; all run in GitHub Actions | Confidence that the whole system works, not just its units |
 
 ## Run it locally
 
@@ -141,6 +145,8 @@ All backend settings are environment variables (see [`backend/app/config.py`](ba
 | `UPLOADS_PER_HOUR` / `QUERIES_PER_HOUR` | `10` / `120` | Per-IP rate limits |
 | `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated allowed origins |
 | `TRUST_PROXY_HEADERS` | `false` | Use `X-Forwarded-For` for client IPs behind a proxy |
+| `RETAIN_PDFS` / `PDF_DIR` | `true` / `data/pdfs` | Keep uploaded PDFs for the source viewer (otherwise it shows passage text) |
+| `DESIRED_RETENTION` / `NEW_CARDS_PER_SESSION` | `0.9` / `20` | FSRS target recall probability; new cards introduced per session |
 
 ## Project layout
 
@@ -157,17 +163,16 @@ backend/app/
     agent.py          GraphRAG agent: tool loop, citations, streamed events
     communities.py    Hierarchical Leiden communities and Claude topic reports
     retriever.py      Fixed vector + graph pipeline (the eval baseline)
+    fsrs.py           FSRS-5 spaced-repetition scheduler (pure, dependency-free)
+    study.py          Flashcard generation, reviews, mastery and streak stats
+    locator.py        Aligns chunks to PDF word boxes for source highlighting
     events.py         Pub/sub that feeds the SSE endpoint
-  routers/            documents (upload, SSE, delete), graph (read, edit, Cypher), query
+  routers/            documents (upload, SSE, PDF, passages, delete), graph (read, edit, Cypher, topics), query, study
   ratelimit.py        Sliding-window limiter for endpoints that spend tokens
 backend/tests/        Unit tests + end-to-end tests against real Neo4j
 backend/eval/         Labelled corpus, questions, and the baseline-vs-agent harness
 frontend/src/
-  components/         GraphCanvas, TableView, FileUpload, QueryPanel (agent trace), TopicsPanel, NodeInspector
+  components/         GraphCanvas, TableView, FileUpload, QueryPanel (agent trace), TopicsPanel, StudyPanel, StudySession, SourceViewer, NodeInspector
   hooks/              useDocumentUpload (SSE), useAgentQuery, useGraphData, useGraphEditor (undo)
-  lib/                SSE parser for POST streams, citation splitting
+  lib/                SSE parser for POST streams, citation splitting, study session state
 ```
-
-## Roadmap
-
-- **Learning layer:** flashcards generated from graph edges and scheduled with FSRS spaced repetition, a mastery heatmap on the graph, and click-through to the highlighted passage in the source PDF.

@@ -5,6 +5,9 @@ import { GraphCanvas } from './components/GraphCanvas'
 import { NodeInspector } from './components/NodeInspector'
 import { QueryPanel } from './components/QueryPanel'
 import { TopicsPanel } from './components/TopicsPanel'
+import { StudyPanel } from './components/StudyPanel'
+import { StudySession } from './components/StudySession'
+import { SourceViewer } from './components/SourceViewer'
 import { Legend } from './components/Legend'
 import { TableView } from './components/TableView'
 import { AddNodeModal, AddEdgeModal } from './components/AddNodeModal'
@@ -16,7 +19,7 @@ import {
   deleteDocument,
   createNode, createEdge, updateNode as apiUpdateNode,
   deleteNode, deleteEdge,
-  getNodeOrphans, getEdgeOrphanTarget, getEntityNeighbourhood,
+  getNodeOrphans, getEdgeOrphanTarget, getEntityNeighbourhood, getMastery,
   listDocuments,
 } from './api/client'
 import type { AgentDone, DocumentStatus, FGNode, FGLink, GraphNode, Topic } from './types/graph'
@@ -57,6 +60,14 @@ export default function App() {
   const [highlight, setHighlight] = useState<Set<string> | null>(null)
   const [activeTopic, setActiveTopic] = useState<string | null>(null)
 
+  // Learning layer
+  const [studyOpen, setStudyOpen] = useState(false)
+  const [sourceChunk, setSourceChunk] = useState<string | null>(null)
+  const [showMastery, setShowMastery] = useState(false)
+  const [mastery, setMastery] = useState<Map<string, number> | null>(null)
+  const [studyVersion, setStudyVersion] = useState(0)
+  const bumpStudy = useCallback(() => setStudyVersion(v => v + 1), [])
+
   const { upload, uploading, status, error } = useDocumentUpload()
   const { graphData, loading: graphLoading, loadFullGraph, loadSample, resetGraph } = useGraphData()
   const editor = useGraphEditor(graphData)
@@ -73,8 +84,13 @@ export default function App() {
 
   // Documents persist server-side: restore the list on load
   useEffect(() => {
-    listDocuments().then(setDocuments).catch(() => { /* backend offline: sample graph still works */ })
-  }, [])
+    listDocuments()
+      .then((docs) => {
+        setDocuments(docs)
+        if (docs.some(d => d.status === 'complete')) loadFullGraph()
+      })
+      .catch(() => { /* backend offline: sample graph still works */ })
+  }, [loadFullGraph])
 
   // Document lifecycle
   useEffect(() => {
@@ -277,6 +293,15 @@ export default function App() {
     if (topic && editor.graph.nodes.length === 0) loadFullGraph()
   }, [editor.graph.nodes.length, loadFullGraph])
 
+  useEffect(() => {
+    if (!showMastery) return
+    let cancelled = false
+    getMastery()
+      .then(rows => { if (!cancelled) setMastery(new Map(rows.map(r => [r.entity_id, r.mastery]))) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [showMastery, studyVersion])
+
   const nodeMap = new Map<string, FGNode>(editor.graph.nodes.map(n => [n.id, n]))
   // Only dim the graph if some highlighted node is actually on screen.
   const visibleHighlight = highlight && [...highlight].some(id => nodeMap.has(id)) ? highlight : undefined
@@ -354,7 +379,19 @@ export default function App() {
 
           <section>
             <SectionLabel>Ask</SectionLabel>
-            <QueryPanel onResult={handleAgentResult} />
+            <QueryPanel onResult={handleAgentResult} onOpenSource={setSourceChunk} />
+          </section>
+
+          <section>
+            <SectionLabel>Study</SectionLabel>
+            <StudyPanel
+              refreshKey={studyVersion + completedDocs.length}
+              canGenerate={completedDocs.length > 0}
+              showMastery={showMastery}
+              onToggleMastery={setShowMastery}
+              onStudy={() => setStudyOpen(true)}
+              onGenerated={bumpStudy}
+            />
           </section>
 
           <TopicsPanel
@@ -411,6 +448,7 @@ export default function App() {
                 selectedNodeId={selectedNode?.id ?? null}
                 drillStack={editor.drillStack}
                 highlightIds={visibleHighlight}
+                mastery={showMastery && mastery ? mastery : undefined}
                 onNodeClick={(node) => setSelectedNode(node.id === selectedNode?.id ? null : node)}
                 onNodeDoubleClick={(node) => {
                   const drilled = editor.drillDown(node)
@@ -491,6 +529,14 @@ export default function App() {
           onClose={() => setDelEdgeModal(null)}
         />
       )}
+      {studyOpen && (
+        <StudySession
+          onClose={() => { setStudyOpen(false); bumpStudy() }}
+          onOpenSource={setSourceChunk}
+          onReviewed={bumpStudy}
+        />
+      )}
+      {sourceChunk && <SourceViewer chunkId={sourceChunk} onClose={() => setSourceChunk(null)} />}
     </div>
   )
 }

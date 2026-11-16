@@ -108,7 +108,9 @@ async def test_run_eval_end_to_end_with_fake_claude(monkeypatch, tmp_path):
     gs = GraphStore()
     await gs.connect()
     try:
-        await gs._run("MATCH (n) WHERE n:Entity OR n:Chunk OR n:Document OR n:Community DETACH DELETE n")
+        await gs._run(
+            "MATCH (n) WHERE n:Entity OR n:Chunk OR n:Document OR n:Community OR n:Card OR n:Review DETACH DELETE n"
+        )
         assert await run_eval.main(["--only", "local-1", "neg-1"]) == 0
         assert await gs.list_documents() == []  # corpus cleaned up
     finally:
